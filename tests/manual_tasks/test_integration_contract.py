@@ -67,6 +67,34 @@ class ExistingWindowIntegrationTests(unittest.TestCase):
         method = ast.unparse(_api_method("main"))
         self.assertIn("self._activity_discovery_attempted = False", method)
 
+
+    def test_next_account_prompt_is_opt_in_and_persisted(self):
+        settings = _source("src/accounts/settings.py")
+        self.assertIn('"prompt_next_account_after_run": False', settings)
+        self.assertIn("def get_prompt_next_account_after_run", settings)
+        self.assertIn("def set_prompt_next_account_after_run", settings)
+
+        api = _source("src/api.py")
+        self.assertIn("def get_prompt_next_account_after_run", api)
+        self.assertIn("def set_prompt_next_account_after_run", api)
+
+        html = _source("gui/index.html")
+        self.assertIn('id="nextAccountPromptToggle"', html)
+
+    def test_next_account_prompt_requires_confirmation_and_never_starts_a_run(self):
+        script = _source("gui/script.js")
+        self.assertIn("async function on_manual_run_finished()", script)
+        callback = script.split("async function on_manual_run_finished()", 1)[1]
+        callback = callback.split("\nfunction stop_bot()", 1)[0]
+        self.assertIn("confirm_modal", callback)
+        self.assertIn("pywebview.api.switch_account(nextAccount.id)", callback)
+        self.assertNotIn("start_bot(", callback)
+        self.assertIn("press Start run manually", callback)
+
+        main = ast.unparse(_api_method("main"))
+        self.assertIn("run_completed_normally", main)
+        self.assertIn("on_manual_run_finished()", main)
+
     def test_regular_run_performs_one_discovery_pass(self):
         method = ast.unparse(_api_method("_run_phase"))
         self.assertIn("not self._activity_discovery_attempted", method)
