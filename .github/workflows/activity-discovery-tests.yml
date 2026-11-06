@@ -29,6 +29,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install Black formatter
+        run: python -m pip install black==26.3.1
+      - name: Show required Black formatting changes
+        run: black --diff src/api.py src/manual_tasks/activity_discovery.py
+        continue-on-error: true
       - name: Compile discovery module and tests
         run: python -m compileall -q src/manual_tasks tests/manual_tasks
       - name: Run activity discovery regression suite
