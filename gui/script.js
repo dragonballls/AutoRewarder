@@ -398,6 +398,8 @@ function start_bot() {
 
   const stopBtn = document.getElementById('stop_btn');
   if (stopBtn) stopBtn.disabled = false;
+  const testActivitiesBtn = document.getElementById('test_activities_btn');
+  if (testActivitiesBtn) testActivitiesBtn.disabled = true;
 
   // Save the query counts to global settings before running.
   if (!dailyOnly) {
@@ -410,6 +412,51 @@ function start_bot() {
 
   update_status_indicator('executing');
   pywebview.api.main(pc, mobile, dailyOnly, 'manual');
+}
+
+async function test_reward_activities() {
+  const testBtn = document.getElementById('test_activities_btn');
+  const startBtn = document.getElementById('start_btn');
+  const stopBtn = document.getElementById('stop_btn');
+  if (!testBtn || !startBtn) return;
+
+  if (!currentAccountId) {
+    show_toast('Add an account first.', 'warning');
+    return;
+  }
+  if (!window.pywebview || !pywebview.api ||
+      typeof pywebview.api.test_activity_discovery !== 'function') {
+    show_toast('Activity testing is unavailable in this app build.', 'error');
+    return;
+  }
+
+  const label = testBtn.querySelector('.activity-test-label');
+  testBtn.disabled = true;
+  startBtn.disabled = true;
+  if (label) label.textContent = 'Testing…';
+  if (stopBtn) stopBtn.disabled = false;
+  update_status_indicator('executing');
+
+  try {
+    const result = await pywebview.api.test_activity_discovery();
+    if (result && result.ok) {
+      const count = Number(result.activity_count || 0);
+      if (count > 0) {
+        show_toast(`Detected ${count} activity card(s). See the Activity log.`, 'success');
+      } else {
+        show_toast('Scan finished; no matching cards were detected. See the Activity log.', 'warning');
+      }
+    } else {
+      const reason = result && result.reason ? String(result.reason).replace(/_/g, ' ') : 'unknown error';
+      show_toast(`Activity test could not run: ${reason}.`, 'warning');
+    }
+  } catch (error) {
+    console.error('Activity discovery test failed:', error);
+    show_toast('Activity test failed. See the Activity log for details.', 'error');
+  } finally {
+    enable_start_button();
+    if (label) label.textContent = 'Test activities';
+  }
 }
 
 function _sync_daily_only_ui() {
@@ -452,7 +499,11 @@ function enable_start_button() {
   const label = btn.querySelector('.btn-label');
   if (label) label.textContent = 'Start run';
   const current = accountsCache.find(a => a.id === currentAccountId);
-  btn.disabled = !(current && current.first_setup_done) || driverWarmingUp || balanceFetching;
+  const canRun = Boolean(current && current.first_setup_done) && !driverWarmingUp && !balanceFetching;
+  btn.disabled = !canRun;
+
+  const testBtn = document.getElementById('test_activities_btn');
+  if (testBtn) testBtn.disabled = !canRun;
 
   // Stop button is meaningful only while a run is in progress.
   const stopBtn = document.getElementById('stop_btn');
