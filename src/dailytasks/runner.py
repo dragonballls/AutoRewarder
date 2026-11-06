@@ -355,6 +355,7 @@ class DailySet:
             f"attempting {len(incomplete_indices)} remaining."
         )
 
+        attempted = 0
         for idx in incomplete_indices:
             if stop_event is not None and stop_event.is_set():
                 self._log(f"Stop requested — halting {section_name} loop.")
@@ -388,9 +389,10 @@ class DailySet:
             else:
                 self._log(f"  → {section_name} #{idx + 1}: clicking…")
 
-            self.cards.click(
+            if self.cards.click(
                 target_card, human, main_tab, label=label, stop_event=stop_event
-            )
+            ):
+                attempted += 1
 
         # If the user stopped, skip the post-run validation entirely — the
         # driver is dead and we don't want to log misleading 0/N counts.
@@ -400,7 +402,7 @@ class DailySet:
                 "newly": 0,
                 "final": already_complete,
                 "total": total_actionable,
-                "attempted": len(incomplete_indices),
+                "attempted": attempted,
             }
 
         # Settle so MS has time to reflect earned points back to the card UI.
@@ -413,8 +415,8 @@ class DailySet:
         ]
         if not final_cards:
             self._log(
-                f"[WARNING] {section_name} cards vanished after run; "
-                f"assuming attempted."
+                f"[WARNING] {section_name} cards could not be re-read after the run; "
+                "no new completion is credited."
             )
             return {
                 "already": already_complete,
@@ -644,33 +646,26 @@ class DailySet:
             # Expose the run's aggregated counts for the stats layer.
             self.last_totals = dict(totals)
 
+            if stop_event is not None and stop_event.is_set():
+                self._log("Rewards tasks stopped before all sections could be verified.")
+                return False
+
             if totals["total"] == 0:
                 self._log("[WARNING] No Rewards cards found across any section.")
                 return False
 
             self._log(
-                f"All sections: {totals['final']}/{totals['total']} complete "
+                f"All sections: {totals['final']}/{totals['total']} verified complete "
                 f"(+{totals['newly']} this run)."
             )
 
             if totals["final"] == totals["total"]:
                 return True
 
-            if totals["newly"] > 0:
-                self._log(
-                    "[INFO] Some Rewards cards still incomplete after run "
-                    "(likely quizzes / polls that need manual answers). "
-                    "Marking today done to avoid retries."
-                )
-                return True
-
-            if totals["attempted"] == 0:
-                # Nothing was incomplete to begin with → already-done state.
-                return True
-
             self._log(
-                "[WARNING] No Rewards cards were completed this run. "
-                "Will retry on next run."
+                f"[WARNING] Rewards tasks remain incomplete "
+                f"({totals['final']}/{totals['total']} verified complete). "
+                "The day will remain unmarked so unfinished cards can be retried."
             )
             return False
 
