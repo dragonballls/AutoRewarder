@@ -40,6 +40,7 @@ from .accounts import (
 from .emulator import DriverManager, HumanBehavior, edge_policy
 from .search import HistoryManager, SearchEngine, llm, resolve_search_locale
 from .dailytasks import DailySet
+from .manual_tasks.activity_discovery import capture_dashboard_activities
 from .stats import (
     StatsManager,
     scrape_points_balance,
@@ -139,6 +140,8 @@ class AutoRewarderAPI:
         # an advanced schedule would each redo the task (and re-upload an image).
         self._daily_set_attempted = False
         self._visual_search_attempted = False
+        self._activity_discovery_attempted = False
+        self._activity_discovery_attempted = False
         # Last balance-scrape diagnostic ({value, via, candidates, url, title}),
         # surfaced to the dashboard so a failed read can be debugged in place.
         self._last_balance_debug = {}
@@ -780,6 +783,55 @@ class AutoRewarderAPI:
     def is_running(self):
         """True when the bot is mid-run. Used by the headless runner to avoid overlap."""
         return self._run_lock.locked()
+
+    def test_activity_discovery(self):
+        """Run the read-only Rewards activity scanner from the existing GUI.
+
+        The test uses the selected account's existing Edge profile in headless
+        mode. It shares the run lock so it cannot overlap searches or another
+        WebDriver session, and it never changes Rewards account state.
+        """
+        if self.account_manager.current_id() is None:
+            self.log("[ACTIVITY TEST] Select an account first.")
+            return {"ok": False, "reason": "no_account"}
+        if self.account_meta is None or not self.account_meta.is_first_setup_done():
+            self.log("[ACTIVITY TEST] Complete account setup first.")
+            return {"ok": False, "reason": "setup_incomplete"}
+        if self.is_driver_loading:
+            self.log("[ACTIVITY TEST] Wait for the existing browser warmup to finish.")
+            return {"ok": False, "reason": "driver_loading"}
+        if not self._run_lock.acquire(blocking=False):
+            self.log("[ACTIVITY TEST] Another run is active. Test skipped.")
+            return {"ok": False, "reason": "run_active"}
+
+        self._stop_event.clear()
+        self.log("=== Read-only activity discovery test ===")
+        try:
+            self._driver = self.driver_manager.setup_driver(headless=True, mobile=False)
+            activities = self._review_activity_discovery(
+                self._driver, source="TEST"
+            )
+            return {
+                "ok": True,
+                "activity_count": len(activities),
+                "categories": sorted({item.kind.value for item in activities}),
+            }
+        except Exception as exc:
+            self.log(f"[ACTIVITY TEST] Failed: {type(exc).__name__}: {exc}")
+            return {"ok": False, "reason": "scan_failed", "error": str(exc)}
+        finally:
+            try:
+                if self._driver is not None:
+                    self._driver.quit()
+            except Exception as exc:
+                self.log(f"[ACTIVITY TEST] Browser cleanup warning: {exc}")
+            self._driver = None
+            self._run_lock.release()
+            try:
+                if self._webview_window:
+                    self._webview_window.evaluate_js("enable_start_button()")
+            except Exception:
+                pass
 
     def stop(self):
         """
@@ -2642,6 +2694,47 @@ class AutoRewarderAPI:
                 pass
             self._run_lock.release()
 
+    def _review_activity_discovery(self, driver, source="RUN"):
+        """Read and summarize dashboard activity cards without acting on them."""
+        try:
+            activities = capture_dashboard_activities(driver)
+        except Exception as exc:
+            self.log(f"[ACTIVITY {source}] Read-only discovery unavailable: {type(exc).__name__}: {exc}")
+            return []
+
+        prefix = f"[ACTIVITY {source}]"
+        if not activities:
+            self.log(
+                f"{prefix} No Read to Earn / Explore / other activity cards were "
+                "recognized. This is a detection result, not proof that none are available."
+            )
+            return []
+
+        counts = {}
+        for activity in activities:
+            counts[activity.kind.value] = counts.get(activity.kind.value, 0) + 1
+        summary = ", ".join(
+            f"{kind.replace('_', ' ')}: {count}"
+            for kind, count in sorted(counts.items())
+        )
+        self.log(
+            f"{prefix} Found {len(activities)} visible activity card(s) "
+            f"({summary}). All actions remain manual."
+        )
+        for activity in activities:
+            points = f", {activity.points} points shown" if activity.points is not None else ""
+            progress = (
+                f", progress {activity.progress_done}/{activity.progress_total}"
+                if activity.progress_done is not None and activity.progress_total is not None
+                else ""
+            )
+            self.log(
+                f"{prefix} {activity.kind.value.replace('_', ' ').title()} · "
+                f"{activity.status.value.replace('_', ' ')} · "
+                f"{activity.title}{points}{progress}"
+            )
+        return activities
+
     def _try_scrape_balance(self):
         """
         Best-effort read of the real points balance from the page the active
@@ -2773,6 +2866,9 @@ class AutoRewarderAPI:
             # Run the visual search even if the Daily Set failed or was skipped.
             if not self._stop_event.is_set():
                 self._run_visual_search_if_needed()
+            if not self._stop_event.is_set() and not self._activity_discovery_attempted:
+                self._activity_discovery_attempted = True
+                self._review_activity_discovery(self._driver, source="RUN")
 
         finally:
             try:
@@ -3111,6 +3207,13 @@ class AutoRewarderAPI:
             # usable fallback source for the balance.
             if not ran_daily_set and not self._stop_event.is_set():
                 self._try_scrape_balance()
+
+            # The first desktop/mobile phase adds a read-only activity review to
+            # the existing run order. It does not click, search, read, answer,
+            # claim, or otherwise change any Rewards activity.
+            if not self._activity_discovery_attempted and not self._stop_event.is_set():
+                self._activity_discovery_attempted = True
+                self._review_activity_discovery(self._driver, source="RUN")
 
         finally:
             try:
