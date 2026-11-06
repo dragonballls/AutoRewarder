@@ -81,7 +81,9 @@ class ExistingWindowIntegrationTests(unittest.TestCase):
         html = _source("gui/index.html")
         self.assertIn('id="nextAccountPromptToggle"', html)
 
-    def test_next_account_prompt_requires_confirmation_and_never_starts_a_run(self):
+    def test_next_account_prompt_requires_confirmation_and_never_starts_a_run(
+        self,
+    ):
         script = _source("gui/script.js")
         self.assertIn("async function on_manual_run_finished()", script)
         callback = script.split("async function on_manual_run_finished()", 1)[1]
@@ -94,6 +96,11 @@ class ExistingWindowIntegrationTests(unittest.TestCase):
         main = ast.unparse(_api_method("main"))
         self.assertIn("run_completed_normally", main)
         self.assertIn("on_manual_run_finished()", main)
+        api = _source("src/api.py")
+        self.assertIn(
+            'if run_context == "manual" and run_completed_normally:',
+            api,
+        )
 
     def test_regular_run_performs_one_discovery_pass(self):
         method = ast.unparse(_api_method("_run_phase"))
