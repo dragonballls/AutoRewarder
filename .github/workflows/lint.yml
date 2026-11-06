@@ -30,10 +30,6 @@ jobs:
 
         pip install -r requirements-dev.txt
 
-    # Temporary formatter diff to diagnose the two files changed in this PR.
-    - name: Show Black formatting diff
-      run: black --diff src/dailytasks/runner.py src/dailytasks/new_dashboard.py || true
-
     # pep8, code formatting, and type checking
     - name: Run Black
       run: |
