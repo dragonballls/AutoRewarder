@@ -123,6 +123,10 @@ Adding another account is slightly different, so please follow these steps:
 > [!TIP]
 > Closing the main window sends AutoRewarder to the system tray. Use the tray icon to reopen the window or choose **Exit** to fully close the app.
 
+### Sequential account demonstration
+
+For a classroom walkthrough, open **Settings → General** and enable **Demo: sequence all accounts**. The existing **Start run** button then walks through every configured account in the order shown by the account manager, logs a simulated start and completion for each account, and returns to the normal ready state. **Stop** interrupts the walkthrough. This mode is an offline UI demonstration only: it does not open Edge, sign in, perform searches or daily activities, or collect points. Turn the setting off to return to the normal single-account Start run behavior.
+
 ### What's Happening?
 
 - AutoRewarder opens Microsoft Edge (you can see it if hide-browser is off)
