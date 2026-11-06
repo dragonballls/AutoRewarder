@@ -91,7 +91,7 @@ try {
     var title = (titleNode ? titleNode.textContent : (a.innerText || a.textContent || a.getAttribute("aria-label") || ""))
       .replace(/\s+/g, " ").trim().slice(0, 120);
     if (!title && !text) return;
-    if (keywordOnly && !/read\s*(to|and)\s*earn|read\s+articles?|explore\s+(on|with)\s+bing|related\s+topics?|quiz|trivia|poll/i.test(title + " " + text)) return;
+    if (keywordOnly && !/read\s*(to|and)\s*earn|read\s+(the\s+)?(latest\s+)?(stories|news|articles?)|explore\s+(on|with)\s+bing|related\s+topics?|quiz|trivia|poll/i.test(title + " " + text)) return;
     var href = a.href || a.getAttribute("href") || "";
     var pointsMatch = text.match(/\+\s*(\d+)\s*(?:points?)?/i);
     var progressMatch = text.match(/\b(\d+)\s*\/\s*(\d+)\b/);
@@ -201,7 +201,7 @@ def _status(record: Mapping[str, Any], progress: tuple[int | None, int | None]) 
 def _classify_text(title: str, description: str, section: str, url: str) -> ActivityKind:
     combined = " ".join((title, description, section, url)).casefold()
     compact = re.sub(r"[^a-z0-9]+", " ", combined).strip()
-    if re.search(r"\bread\s*(?:to|and)\s*earn\b|\bread\s+articles?\s+to\s+earn\b", compact):
+    if re.search(r"\bread\s*(?:to|and)\s*earn\b|\bread\s+articles?\s+to\s+earn\b|\bread\s+(?:the\s+)?(?:latest\s+)?(?:stories|news|articles?)\b", compact):
         return ActivityKind.READ_TO_EARN
     if re.search(r"\bexplore\s+(?:on|with)\s+bing\b|\bexplore\s+(?:a\s+)?topic\s+(?:on\s+)?bing\b|\brelated\s+topics?\b", compact):
         return ActivityKind.EXPLORE
@@ -288,6 +288,18 @@ def capture_dashboard_activities(driver, poll_attempts: int = 4) -> list[ReviewA
         for label, url in (("Dashboard", DASHBOARD_URL), ("Earn", EARN_URL)):
             try:
                 driver.get(url)
+                page_url = str(driver.current_url or url)
+                page_host = urlparse(page_url).hostname
+                if not page_host or not any(
+                    page_host.lower() == domain
+                    or page_host.lower().endswith("." + domain)
+                    for domain in _ALLOWED_HOSTS
+                ):
+                    page_errors.append(
+                        f"{label}: page redirected away from Microsoft Rewards; "
+                        "check the signed-in Edge profile."
+                    )
+                    continue
                 page_records = []
                 for attempt in range(poll_attempts):
                     result = driver.execute_script(_ACTIVITY_SCAN_JS)
