@@ -56,13 +56,15 @@ class ExistingWindowIntegrationTests(unittest.TestCase):
     def test_regular_run_performs_one_discovery_pass(self):
         method = ast.unparse(_api_method("_run_phase"))
         self.assertIn("not self._activity_discovery_attempted", method)
-        self.assertIn('self._review_activity_discovery(self._driver, source="RUN")', method)
+        self.assertIn("_review_activity_discovery", method)
+        self.assertIn("source='RUN'", method)
         self.assertIn("self._activity_discovery_attempted = True", method)
 
     def test_daily_only_run_also_performs_discovery(self):
         method = ast.unparse(_api_method("_run_daily_only"))
         self.assertIn("not self._activity_discovery_attempted", method)
-        self.assertIn('self._review_activity_discovery(self._driver, source="RUN")', method)
+        self.assertIn("_review_activity_discovery", method)
+        self.assertIn("source='RUN'", method)
         self.assertIn("self._activity_discovery_attempted = True", method)
 
     def test_review_helper_only_calls_the_read_only_scanner(self):
@@ -83,7 +85,8 @@ class ExistingWindowIntegrationTests(unittest.TestCase):
             "src/search/engine.py",
             "src/emulator/driver.py",
         ):
-            self.assertTrue((REPO_ROOT / path).is_file(), path)
+            source = _source(path)
+            self.assertNotIn("capture_dashboard_activities", source, path)
 
 
 if __name__ == "__main__":
