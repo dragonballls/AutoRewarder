@@ -813,9 +813,7 @@ class AutoRewarderAPI:
         self.log("=== Read-only activity discovery test ===")
         try:
             self._driver = self.driver_manager.setup_driver(headless=True, mobile=False)
-            activities = self._review_activity_discovery(
-                self._driver, source="TEST"
-            )
+            activities = self._review_activity_discovery(self._driver, source="TEST")
             return {
                 "ok": True,
                 "activity_count": len(activities),
@@ -2882,10 +2880,7 @@ class AutoRewarderAPI:
             # Run the visual search even if the Daily Set failed or was skipped.
             if not self._stop_event.is_set():
                 self._run_visual_search_if_needed()
-            if (
-                not self._stop_event.is_set()
-                and not self._activity_discovery_attempted
-            ):
+            if not self._stop_event.is_set() and not self._activity_discovery_attempted:
                 self._activity_discovery_attempted = True
                 self._review_activity_discovery(self._driver, source="RUN")
 
@@ -3230,10 +3225,7 @@ class AutoRewarderAPI:
             # The first desktop/mobile phase adds a read-only activity review to
             # the existing run order. It does not click, search, read, answer,
             # claim, or otherwise change any Rewards activity.
-            if (
-                not self._activity_discovery_attempted
-                and not self._stop_event.is_set()
-            ):
+            if not self._activity_discovery_attempted and not self._stop_event.is_set():
                 self._activity_discovery_attempted = True
                 self._review_activity_discovery(self._driver, source="RUN")
 
