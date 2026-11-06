@@ -167,6 +167,7 @@ See the [Development Setup](#development-setup-for-developers) section.
 - Optional tab switching between result categories (Images/Videos/News)
 - Natural mouse movement/clicking (W3C Actions/randomized Bezier trajectories)
 - Daily Set task collection (runs once per day, per account)
+- Read-only Rewards activity discovery integrated into Start Run, plus an in-window Test activities check for Read to Earn, Explore on Bing, and other visible activity types
 - Separate browser profile per account
 - Localization detection (language, region)
 - Simulated human typos in search queries (via nlpaug)
