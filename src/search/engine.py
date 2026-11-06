@@ -1185,7 +1185,8 @@ class SearchEngine:
             # offer link), which is the first thing to check when the search
             # runs but the Rewards task stays uncredited.
             self._log(
-                f"Visual search completed successfully ({self._search_surface(driver)})."
+                "Visual search results loaded successfully "
+                f"({self._search_surface(driver)}); Rewards credit is not yet confirmed."
             )
             return True
 
