@@ -141,7 +141,6 @@ class AutoRewarderAPI:
         self._daily_set_attempted = False
         self._visual_search_attempted = False
         self._activity_discovery_attempted = False
-        self._activity_discovery_attempted = False
         # Last balance-scrape diagnostic ({value, via, candidates, url, title}),
         # surfaced to the dashboard so a failed read can be debugged in place.
         self._last_balance_debug = {}
@@ -2598,6 +2597,7 @@ class AutoRewarderAPI:
         self._last_scraped_balance = None
         self._daily_set_attempted = False
         self._visual_search_attempted = False
+        self._activity_discovery_attempted = False
 
         try:
             if daily_only:
