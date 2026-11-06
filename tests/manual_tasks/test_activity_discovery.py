@@ -4,8 +4,12 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+import sys
 
-from src.manual_tasks.activity_discovery import (
+# Import this isolated module without importing src/__init__.py and the full app.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from manual_tasks.activity_discovery import (
     ActivityKind,
     ActivityStatus,
     capture_dashboard_activities,
@@ -25,6 +29,10 @@ class ActivityClassificationTests(unittest.TestCase):
 
     def test_read_articles_to_earn_variant_is_detected(self):
         item = classify_activity({"title": "Read articles to earn points"})
+        self.assertEqual(item.kind, ActivityKind.READ_TO_EARN)
+
+    def test_read_stories_variant_is_detected(self):
+        item = classify_activity({"title": "Read the latest stories"})
         self.assertEqual(item.kind, ActivityKind.READ_TO_EARN)
 
     def test_explore_on_bing_is_detected(self):
@@ -216,9 +224,24 @@ class _FakeDriver:
         return self.page_records.get(self.current_url, [])
 
 
+class _RedirectingDriver(_FakeDriver):
+    def get(self, url):
+        self.visited.append(url)
+        if url.startswith("https://rewards.bing.com/"):
+            self.current_url = "https://login.live.com/"
+        else:
+            self.current_url = url
+
+
 class DashboardCaptureTests(unittest.TestCase):
+    def test_capture_reports_login_redirect_instead_of_false_no_activity(self):
+        driver = _RedirectingDriver()
+        with self.assertRaisesRegex(RuntimeError, "signed-in Edge profile"):
+            capture_dashboard_activities(driver)
+        self.assertEqual(driver.current_url, "https://www.bing.com/search?q=existing")
+
     def test_capture_reads_dashboard_pages_and_restores_original_url(self):
-        from src.manual_tasks.activity_discovery import DASHBOARD_URL, EARN_URL
+        from manual_tasks.activity_discovery import DASHBOARD_URL, EARN_URL
 
         driver = _FakeDriver({
             DASHBOARD_URL: [{
@@ -249,7 +272,7 @@ class DashboardCaptureTests(unittest.TestCase):
         self.assertNotIn("https://www.bing.com/search?q=space", driver.visited)
 
     def test_capture_returns_partial_results_when_one_dashboard_page_fails(self):
-        from src.manual_tasks.activity_discovery import DASHBOARD_URL, EARN_URL
+        from manual_tasks.activity_discovery import DASHBOARD_URL, EARN_URL
 
         driver = _FakeDriver(
             {DASHBOARD_URL: [{"title": "Read to Earn"}]},
@@ -261,7 +284,7 @@ class DashboardCaptureTests(unittest.TestCase):
         self.assertEqual(driver.current_url, "https://www.bing.com/search?q=existing")
 
     def test_capture_raises_when_all_dashboard_pages_fail_and_restores_tab(self):
-        from src.manual_tasks.activity_discovery import DASHBOARD_URL, EARN_URL
+        from manual_tasks.activity_discovery import DASHBOARD_URL, EARN_URL
 
         driver = _FakeDriver(failing_urls={DASHBOARD_URL, EARN_URL})
         with self.assertRaises(RuntimeError):
@@ -276,7 +299,7 @@ class DashboardCaptureTests(unittest.TestCase):
         self.assertEqual(driver.visited, [])
 
     def test_scanner_script_contains_no_activity_execution_commands(self):
-        from src.manual_tasks.activity_discovery import _ACTIVITY_SCAN_JS
+        from manual_tasks.activity_discovery import _ACTIVITY_SCAN_JS
 
         for forbidden in ("click()", "send_keys", "window.open", ".submit("):
             self.assertNotIn(forbidden, _ACTIVITY_SCAN_JS)
