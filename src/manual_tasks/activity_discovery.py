@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
-
 DASHBOARD_URL = "https://rewards.bing.com/dashboard"
 EARN_URL = "https://rewards.bing.com/earn"
 
@@ -143,8 +142,7 @@ def _is_official_https_url(value: Any) -> str | None:
         return None
     host = parsed.hostname.lower().rstrip(".")
     if not any(
-        host == domain or host.endswith("." + domain)
-        for domain in _ALLOWED_HOSTS
+        host == domain or host.endswith("." + domain) for domain in _ALLOWED_HOSTS
     ):
         return None
     if parsed.username or parsed.password:
