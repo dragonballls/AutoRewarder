@@ -1,0 +1,19 @@
+{
+  "activities": [
+    {
+      "title": "Read to Earn",
+      "description": "Read an available MSN story",
+      "section": "More Activities",
+      "points": 5,
+      "status": "available",
+      "url": "https://www.msn.com/"
+    },
+    {
+      "title": "Explore on Bing: Space",
+      "section": "More Activities",
+      "points": 10,
+      "progress": "0/1",
+      "url": "https://www.bing.com/"
+    }
+  ]
+}
