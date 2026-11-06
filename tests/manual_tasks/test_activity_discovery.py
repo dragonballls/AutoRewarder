@@ -8,6 +8,7 @@ from pathlib import Path
 from src.manual_tasks.activity_discovery import (
     ActivityKind,
     ActivityStatus,
+    capture_dashboard_activities,
     classify_activity,
     load_snapshot,
     main,
@@ -181,6 +182,104 @@ class ActivityNormalizationTests(unittest.TestCase):
             path.write_text("{", encoding="utf-8")
             with self.assertRaises(SystemExit):
                 main([str(path)])
+
+
+
+class _FakeSwitch:
+    def __init__(self, driver):
+        self.driver = driver
+
+    def window(self, handle):
+        if handle not in self.driver.window_handles:
+            raise RuntimeError("unknown window")
+        self.driver.current_window_handle = handle
+
+
+class _FakeDriver:
+    def __init__(self, page_records=None, failing_urls=None):
+        self.current_url = "https://www.bing.com/search?q=existing"
+        self.current_window_handle = "tab-1"
+        self.window_handles = ["tab-1"]
+        self.page_records = page_records or {}
+        self.failing_urls = set(failing_urls or [])
+        self.visited = []
+        self.switch_to = _FakeSwitch(self)
+
+    def get(self, url):
+        self.visited.append(url)
+        if url in self.failing_urls:
+            raise RuntimeError("simulated navigation failure")
+        self.current_url = url
+
+    def execute_script(self, script):
+        self.assertion_script = script
+        return self.page_records.get(self.current_url, [])
+
+
+class DashboardCaptureTests(unittest.TestCase):
+    def test_capture_reads_dashboard_pages_and_restores_original_url(self):
+        from src.manual_tasks.activity_discovery import DASHBOARD_URL, EARN_URL
+
+        driver = _FakeDriver({
+            DASHBOARD_URL: [{
+                "title": "Read to Earn",
+                "description": "Read an available MSN story",
+                "section": "Dashboard",
+                "points": 5,
+                "url": "https://www.msn.com/en-us/news",
+            }],
+            EARN_URL: [{
+                "title": "Explore on Bing: Space",
+                "description": "Explore related topics",
+                "section": "More Activities",
+                "points": 10,
+                "progress": "0/1",
+                "url": "https://www.bing.com/search?q=space",
+            }],
+        })
+        activities = capture_dashboard_activities(driver)
+        self.assertEqual(
+            {item.kind for item in activities},
+            {ActivityKind.READ_TO_EARN, ActivityKind.EXPLORE},
+        )
+        self.assertEqual(driver.current_url, "https://www.bing.com/search?q=existing")
+        self.assertEqual(driver.visited[:2], [DASHBOARD_URL, EARN_URL])
+        self.assertEqual(driver.visited[-1], "https://www.bing.com/search?q=existing")
+        self.assertNotIn("https://www.msn.com/en-us/news", driver.visited)
+        self.assertNotIn("https://www.bing.com/search?q=space", driver.visited)
+
+    def test_capture_returns_partial_results_when_one_dashboard_page_fails(self):
+        from src.manual_tasks.activity_discovery import DASHBOARD_URL, EARN_URL
+
+        driver = _FakeDriver(
+            {DASHBOARD_URL: [{"title": "Read to Earn"}]},
+            failing_urls={EARN_URL},
+        )
+        activities = capture_dashboard_activities(driver)
+        self.assertEqual(len(activities), 1)
+        self.assertEqual(activities[0].kind, ActivityKind.READ_TO_EARN)
+        self.assertEqual(driver.current_url, "https://www.bing.com/search?q=existing")
+
+    def test_capture_raises_when_all_dashboard_pages_fail_and_restores_tab(self):
+        from src.manual_tasks.activity_discovery import DASHBOARD_URL, EARN_URL
+
+        driver = _FakeDriver(failing_urls={DASHBOARD_URL, EARN_URL})
+        with self.assertRaises(RuntimeError):
+            capture_dashboard_activities(driver)
+        self.assertEqual(driver.current_window_handle, "tab-1")
+        self.assertEqual(driver.current_url, "https://www.bing.com/search?q=existing")
+
+    def test_capture_rejects_invalid_poll_attempts_without_touching_driver(self):
+        driver = _FakeDriver()
+        with self.assertRaises(ValueError):
+            capture_dashboard_activities(driver, poll_attempts=0)
+        self.assertEqual(driver.visited, [])
+
+    def test_scanner_script_contains_no_activity_execution_commands(self):
+        from src.manual_tasks.activity_discovery import _ACTIVITY_SCAN_JS
+
+        for forbidden in ("click()", "send_keys", "window.open", ".submit("):
+            self.assertNotIn(forbidden, _ACTIVITY_SCAN_JS)
 
 
 if __name__ == "__main__":
