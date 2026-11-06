@@ -374,11 +374,11 @@ def _verified_daily_set_counts(before_items, after_items):
         return None
 
     final = sum(
-        1 for key in before_by_key
-        if after_by_key[key].get("isCompleted") is True
+        1 for key in before_by_key if after_by_key[key].get("isCompleted") is True
     )
     newly = sum(
-        1 for key, item in before_by_key.items()
+        1
+        for key, item in before_by_key.items()
         if item.get("isCompleted") is not True
         and after_by_key[key].get("isCompleted") is True
     )
@@ -444,8 +444,7 @@ class NewDashboardDailySet:
                 continue
             prev = by_id.get(key)
             if prev is None or (
-                item.get("isCompleted") is True
-                and prev.get("isCompleted") is not True
+                item.get("isCompleted") is True and prev.get("isCompleted") is not True
             ):
                 by_id[key] = item
         return list(by_id.values())
@@ -1272,9 +1271,7 @@ class NewDashboardDailySet:
                 f"New dashboard daily set: read {len(todays)} item(s) via {source}."
             )
 
-            incomplete = [
-                it for it in todays if it.get("isCompleted") is not True
-            ]
+            incomplete = [it for it in todays if it.get("isCompleted") is not True]
             total = len(todays)
             already = total - len(incomplete)
             self.last_totals = {
