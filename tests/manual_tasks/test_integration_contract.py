@@ -20,8 +20,7 @@ def _api_method(name: str) -> ast.FunctionDef:
     )
     return next(
         node for node in api_class.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == name
+        if isinstance(node, ast.FunctionDef) and node.name == name
     )
 
 
