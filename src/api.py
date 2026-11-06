@@ -3004,6 +3004,19 @@ class AutoRewarderAPI:
 
         self._visual_search_attempted = True
 
+        # When the Daily Set was skipped earlier in this run, establish a
+        # fresh pre-search baseline before attempting Visual Search. Without a
+        # baseline, an old nonzero streak must not be mistaken for new credit.
+        if getattr(self.daily_set, "visual_search_progress", None) is None:
+            try:
+                self.daily_set.visual_search_progress = (
+                    self.daily_set.read_visual_search_progress(self._driver)
+                )
+            except Exception as e:
+                self.log(
+                    f"[WARNING] Could not read a pre-search Visual Search baseline: {e}"
+                )
+
         used_images = self.daily_set.get_used_visual_search_images()
         mission_url = getattr(self.daily_set, "visual_search_url", None)
 
