@@ -142,7 +142,10 @@ def _is_official_https_url(value: Any) -> str | None:
     if parsed.scheme.lower() != "https" or not parsed.hostname:
         return None
     host = parsed.hostname.lower().rstrip(".")
-    if not any(host == domain or host.endswith("." + domain) for domain in _ALLOWED_HOSTS):
+    if not any(
+        host == domain or host.endswith("." + domain)
+        for domain in _ALLOWED_HOSTS
+    ):
         return None
     if parsed.username or parsed.password:
         return None
@@ -172,7 +175,10 @@ def _parse_progress(value: Any) -> tuple[int | None, int | None]:
     return done, total
 
 
-def _status(record: Mapping[str, Any], progress: tuple[int | None, int | None]) -> ActivityStatus:
+def _status(
+    record: Mapping[str, Any],
+    progress: tuple[int | None, int | None],
+) -> ActivityStatus:
     completed = record.get("completed")
     if completed is True:
         return ActivityStatus.COMPLETED
@@ -198,14 +204,28 @@ def _status(record: Mapping[str, Any], progress: tuple[int | None, int | None]) 
     return aliases.get(raw, ActivityStatus.UNKNOWN)
 
 
-def _classify_text(title: str, description: str, section: str, url: str) -> ActivityKind:
+def _classify_text(
+    title: str, description: str, section: str, url: str
+) -> ActivityKind:
     combined = " ".join((title, description, section, url)).casefold()
     compact = re.sub(r"[^a-z0-9]+", " ", combined).strip()
-    if re.search(r"\bread\s*(?:to|and)\s*earn\b|\bread\s+articles?\s+to\s+earn\b|\bread\s+(?:the\s+)?(?:latest\s+)?(?:stories|news|articles?)\b", compact):
+    read_patterns = (
+        r"\bread\s*(?:to|and)\s*earn\b"
+        r"|\bread\s+articles?\s+to\s+earn\b"
+        r"|\bread\s+(?:the\s+)?(?:latest\s+)?(?:stories|news|articles?)\b"
+    )
+    if re.search(read_patterns, compact):
         return ActivityKind.READ_TO_EARN
-    if re.search(r"\bexplore\s+(?:on|with)\s+bing\b|\bexplore\s+(?:a\s+)?topic\s+(?:on\s+)?bing\b|\brelated\s+topics?\b", compact):
+    explore_patterns = (
+        r"\bexplore\s+(?:on|with)\s+bing\b"
+        r"|\bexplore\s+(?:a\s+)?topic\s+(?:on\s+)?bing\b"
+        r"|\brelated\s+topics?\b"
+    )
+    if re.search(explore_patterns, compact):
         return ActivityKind.EXPLORE
-    if "/earn/quest/" in url.casefold() or re.search(r"\b(punch\s*card|quest)\b", compact):
+    if "/earn/quest/" in url.casefold() or re.search(
+        r"\b(punch\s*card|quest)\b", compact
+    ):
         return ActivityKind.PUNCHCARD
     if re.search(r"\b(daily\s+set|dailyset)\b", compact):
         return ActivityKind.DAILY_SET
@@ -259,7 +279,9 @@ def review_activities(records: Iterable[Mapping[str, Any]]) -> list[ReviewActivi
     return result
 
 
-def capture_dashboard_activities(driver, poll_attempts: int = 4) -> list[ReviewActivity]:
+def capture_dashboard_activities(
+    driver, poll_attempts: int = 4
+) -> list[ReviewActivity]:
     """Read visible activity cards from the dashboard and /earn page.
 
     Only the two dashboard pages are loaded. Activity links are extracted as
@@ -268,7 +290,11 @@ def capture_dashboard_activities(driver, poll_attempts: int = 4) -> list[ReviewA
     """
     if driver is None:
         raise ValueError("A live Rewards WebDriver is required.")
-    if isinstance(poll_attempts, bool) or not isinstance(poll_attempts, int) or not 1 <= poll_attempts <= 10:
+    if (
+        isinstance(poll_attempts, bool)
+        or not isinstance(poll_attempts, int)
+        or not 1 <= poll_attempts <= 10
+    ):
         raise ValueError("poll_attempts must be an integer from 1 to 10.")
 
     original_url = ""
@@ -345,7 +371,9 @@ def load_snapshot(path: str | Path) -> list[ReviewActivity]:
         payload = json.load(handle)
     records = payload.get("activities") if isinstance(payload, Mapping) else payload
     if not isinstance(records, list):
-        raise ValueError("Snapshot must be a list or an object with an 'activities' list.")
+        raise ValueError(
+            "Snapshot must be a list or an object with an 'activities' list."
+        )
     return review_activities(records)
 
 
@@ -371,11 +399,13 @@ def render_report(activities: Iterable[ReviewActivity]) -> str:
         )
         link = f"[Open manually]({item.manual_url})" if item.manual_url else "—"
         cells = [item.title, item.kind.value, item.status.value, points, progress, link]
-        lines.append("| " + " | ".join(value.replace("|", "\\|") for value in cells) + " |")
+        escaped_cells = [value.replace("|", "\\|") for value in cells]
+        lines.append("| " + " | ".join(escaped_cells) + " |")
     lines.extend(
         [
             "",
-            "No searches, article reading, quiz answers, poll responses, clicks, or point claims were performed by this tool.",
+            "No searches, article reading, quiz answers, poll responses, clicks,",
+            "or point claims were performed by this tool.",
         ]
     )
     return "\n".join(lines)
@@ -386,14 +416,19 @@ def main(argv: list[str] | None = None) -> int:
         description="Classify a manually prepared Microsoft Rewards activity snapshot."
     )
     parser.add_argument("snapshot", help="Path to a JSON file you prepared manually.")
-    parser.add_argument("--json", action="store_true", help="Print normalized JSON instead of Markdown.")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print normalized JSON instead of Markdown.",
+    )
     args = parser.parse_args(argv)
     try:
         activities = load_snapshot(args.snapshot)
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         parser.error(str(exc))
     if args.json:
-        print(json.dumps([item.to_dict() for item in activities], indent=2, ensure_ascii=False))
+        payload = [item.to_dict() for item in activities]
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         print(render_report(activities))
     return 0
