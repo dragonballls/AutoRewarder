@@ -90,7 +90,12 @@ try {
     var title = (titleNode ? titleNode.textContent : (a.innerText || a.textContent || a.getAttribute("aria-label") || ""))
       .replace(/\s+/g, " ").trim().slice(0, 120);
     if (!title && !text) return;
-    if (keywordOnly && !/read\s*(to|and)\s*earn|read\s+(the\s+)?(latest\s+)?(stories|news|articles?)|explore\s+(on|with)\s+bing|related\s+topics?|quiz|trivia|poll/i.test(title + " " + text)) return;
+    var keywordPattern = new RegExp(
+      "read\\s*(to|and)\\s*earn|read\\s+(the\\s+)?(latest\\s+)?(stories|news|articles?)|" +
+      "explore\\s+(on|with)\\s+bing|related\\s+topics?|quiz|trivia|poll",
+      "i"
+    );
+    if (keywordOnly && !keywordPattern.test(title + " " + text)) return;
     var href = a.href || a.getAttribute("href") || "";
     var pointsMatch = text.match(/\+\s*(\d+)\s*(?:points?)?/i);
     var progressMatch = text.match(/\b(\d+)\s*\/\s*(\d+)\b/);
