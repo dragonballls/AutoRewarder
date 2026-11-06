@@ -354,7 +354,7 @@ def _verified_daily_set_counts(before_items, after_items):
         for field in ("offerId", "hash", "destination"):
             value = item.get(field)
             if isinstance(value, (str, int)) and str(value).strip():
-                return str(value).strip()
+                return (field, str(value).strip())
         return None
 
     before_by_key = {}
@@ -1004,7 +1004,10 @@ class NewDashboardDailySet:
             human.click_element(btn, scroll_into_view=True)
             time.sleep(random.uniform(1.5, 2.5))
             self.last_totals["attempted"] = self.last_totals.get("attempted", 0) + 1
-            self._log("Clicked claim — pending points submitted.")
+            self._log(
+                "Claim control clicked; Rewards balance has not yet confirmed "
+                "that the points were added."
+            )
         except Exception as e:
             if stop_event is not None and stop_event.is_set():
                 return
@@ -1355,23 +1358,23 @@ class NewDashboardDailySet:
                 driver.get(DASHBOARD_URL)
                 self._wait_ready(driver)
                 time.sleep(random.uniform(1.5, 2.5))
-                # The re-read can race a still-streaming (partial) snapshot; one
-                # missing cards would make them look completed and inflate
-                # `newly`. Only trust a snapshot that covers at least as many
-                # cards as we started with — retry (JSON then DOM) until it does.
+                # Retry while the page streams until every original activity is
+                # present under the same stable identity. Merely having the same
+                # number of cards is not sufficient proof of a complete snapshot.
                 after = []
+                verified_counts = None
                 for _ in range(5):
-                    # Same source arbitration as the initial read: a partial
-                    # (or other-day) JSON snapshot must not beat the DOM, or
-                    # missing cards would be counted as completed.
+                    # Same source arbitration as the initial read: JSON and DOM
+                    # snapshots are both considered, but each original card must
+                    # still be identifiable before its state is trusted.
                     after, _src = self._choose_today(
                         self._todays_items(self._read_items(driver)),
                         self._todays_items(self._read_items_dom(driver)),
                     )
-                    if len(after) >= len(todays):
+                    verified_counts = _verified_daily_set_counts(todays, after)
+                    if verified_counts is not None:
                         break
                     time.sleep(1.5)
-                verified_counts = _verified_daily_set_counts(todays, after)
                 if verified_counts is not None:
                     verified = True
                     newly = verified_counts["newly"]
