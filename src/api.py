@@ -799,6 +799,9 @@ class AutoRewarderAPI:
         if self.is_driver_loading:
             self.log("[ACTIVITY TEST] Wait for the existing browser warmup to finish.")
             return {"ok": False, "reason": "driver_loading"}
+        if self._balance_lock.locked():
+            self.log("[ACTIVITY TEST] A balance refresh is using this account profile. Try again when it finishes.")
+            return {"ok": False, "reason": "balance_refresh"}
         if not self._run_lock.acquire(blocking=False):
             self.log("[ACTIVITY TEST] Another run is active. Test skipped.")
             return {"ok": False, "reason": "run_active"}
