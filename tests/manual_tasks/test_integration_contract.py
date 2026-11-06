@@ -225,6 +225,35 @@ class CompletionIntegrityTests(unittest.TestCase):
         self.assertNotIn("earn", expression)
         self.assertNotIn("quests", expression)
 
+    def test_legacy_unverified_status_dates_are_ignored(self):
+        tree = ast.parse(_source("src/dailytasks/runner.py"))
+        daily_set = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "DailySet"
+        )
+        methods = {
+            node.name: ast.unparse(node)
+            for node in daily_set.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertIn("last_daily_set_verified_date", methods["should_perform_daily_set"])
+        self.assertNotIn("last_daily_set_date", methods["should_perform_daily_set"])
+        self.assertIn("last_daily_set_verified_date", methods["mark_as_completed"])
+        self.assertIn('pop("last_daily_set_date"', methods["mark_as_completed"])
+        self.assertIn(
+            "last_visual_search_verified_date",
+            methods["should_perform_visual_search"],
+        )
+        self.assertNotIn("last_visual_search_date", methods["should_perform_visual_search"])
+        self.assertIn(
+            "last_visual_search_verified_date",
+            methods["mark_visual_search_as_completed"],
+        )
+        self.assertIn(
+            'pop("last_visual_search_date"',
+            methods["mark_visual_search_as_completed"],
+        )
+
     def test_fake_sequential_demo_has_been_removed_everywhere(self):
         for path in (
             "gui/script.js",
