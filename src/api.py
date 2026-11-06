@@ -600,6 +600,17 @@ class AutoRewarderAPI:
         state = "ON (X → tray)" if value else "OFF (X → quit)"
         self.log(f"Close-to-tray: {state}. Restart to apply.")
 
+    def get_prompt_next_account_after_run(self):
+        """Return whether the GUI should offer a next-account switch."""
+        return self.global_settings.get_prompt_next_account_after_run()
+
+    def set_prompt_next_account_after_run(self, enabled):
+        """Persist the opt-in manual next-account prompt setting."""
+        self.global_settings.set_prompt_next_account_after_run(enabled)
+        state = "ON" if enabled else "OFF"
+        self.log(f"Prompt for next account after manual run: {state}")
+        return True
+
     def get_force_tasks(self):
         """Return the force flags for the daily tasks and the visual search."""
         return self.global_settings.get_force_tasks()
@@ -2602,6 +2613,7 @@ class AutoRewarderAPI:
         self._daily_set_attempted = False
         self._visual_search_attempted = False
         self._activity_discovery_attempted = False
+        run_completed_normally = False
 
         try:
             if daily_only:
@@ -2651,6 +2663,7 @@ class AutoRewarderAPI:
                 self.log("Stopped.")
             else:
                 self.log("Done!")
+                run_completed_normally = True
 
                 # Register completed runs for the GitHub star prompt
                 completed_activity = (
@@ -2686,15 +2699,20 @@ class AutoRewarderAPI:
                     except Exception as e:
                         self.log(f"[WARNING] Failed to update deduplication date: {e}")
         finally:
-            # Persist this run's activity + balance before unlocking, so a
-            # GUI refresh triggered by enable_start_button() reads fresh stats.
-            self._record_session_stats()
+            # Persist before unlocking, then release the run lock before the UI
+            # offers a manual account switch.
             try:
-                if self._webview_window:
-                    self._webview_window.evaluate_js("enable_start_button()")
-            except Exception:
-                pass
-            self._run_lock.release()
+                self._record_session_stats()
+            finally:
+                self._run_lock.release()
+                try:
+                    if self._webview_window:
+                        callback = "enable_start_button()"
+                        if run_context == "manual" and run_completed_normally:
+                            callback += "; on_manual_run_finished()"
+                        self._webview_window.evaluate_js(callback)
+                except Exception:
+                    pass
 
     def _review_activity_discovery(self, driver, source="RUN"):
         """Read and summarize dashboard activity cards without acting on them."""

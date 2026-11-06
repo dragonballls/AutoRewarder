@@ -11,6 +11,7 @@ let driverWarmingUp = false;
 // True while a balance scrape holds a driver (launch refresh, manual refresh,
 // or account-switch refresh). Start must stay disabled during it too.
 let balanceFetching = false;
+let promptNextAccountAfterRun = false;
 function can_start_current_mode() {
   if (driverWarmingUp || balanceFetching) return false;
   const current = accountsCache.find(a => a.id === currentAccountId);
@@ -520,6 +521,43 @@ function enable_start_button() {
   update_status_indicator();
 }
 
+async function on_manual_run_finished() {
+  if (!promptNextAccountAfterRun || accountsCache.length < 2) return;
+
+  const currentIndex = accountsCache.findIndex(account => account.id === currentAccountId);
+  if (currentIndex < 0) return;
+
+  let nextAccount = null;
+  for (let offset = 1; offset < accountsCache.length; offset++) {
+    const candidate = accountsCache[(currentIndex + offset) % accountsCache.length];
+    if (candidate && candidate.id !== currentAccountId && candidate.first_setup_done) {
+      nextAccount = candidate;
+      break;
+    }
+  }
+  if (!nextAccount) return;
+
+  const confirmed = await confirm_modal(
+    "Run finished",
+    "The next configured account is \"" + nextAccount.label
+      + "\". Switch to it? You will need to press Start run manually.",
+    {confirmLabel: "Switch account", cancelLabel: "Stay here"}
+  );
+  if (!confirmed) return;
+
+  try {
+    const switched = await pywebview.api.switch_account(nextAccount.id);
+    if (!switched) {
+      show_toast("Could not switch accounts. The current selection was left unchanged.", "warning");
+      return;
+    }
+    update_log("Selected \"" + nextAccount.label + "\". Press Start run when you are ready.");
+  } catch (error) {
+    console.error("Next-account switch failed:", error);
+    show_toast("Could not switch to the next account.", "error");
+  }
+}
+
 function stop_bot() {
   if (!window.pywebview || !pywebview.api || !pywebview.api.stop) return;
   const stopBtn = document.getElementById('stop_btn');
@@ -942,11 +980,12 @@ function open_settings_modal(panelId) {
     pywebview.api.get_all_schedules(),
     pywebview.api.get_launch_on_startup(),
     pywebview.api.get_close_to_tray(),
+    pywebview.api.get_prompt_next_account_after_run(),
     pywebview.api.get_llm_config(),
     pywebview.api.get_force_tasks(),
     pywebview.api.get_app_info(),
     pywebview.api.get_manual_search_delay(),
-  ]).then(([schedules, startup, closeToTray, llmConfig, forceTasks, appInfo, manualSearchDelay]) => {
+  ]).then(([schedules, startup, closeToTray, promptNextAccount, llmConfig, forceTasks, appInfo, manualSearchDelay]) => {
     render_account_panels(Array.isArray(schedules) ? schedules : []);
 
     // Background auto-run toggle — disable row on unsupported OS.
@@ -962,6 +1001,13 @@ function open_settings_modal(panelId) {
       startupRow.classList.remove('row-disabled');
       startupToggle.disabled = false;
       startupHint.textContent = "Automatically run AutoRewarder in the background at each account's scheduled time.";
+    }
+
+    // Next-account prompt is opt-in and only offers a manual switch.
+    promptNextAccountAfterRun = Boolean(promptNextAccount);
+    const nextAccountPromptToggle = document.getElementById("nextAccountPromptToggle");
+    if (nextAccountPromptToggle) {
+      nextAccountPromptToggle.checked = promptNextAccountAfterRun;
     }
 
     // Close-to-tray toggle — default to true if the API failed.
@@ -1749,6 +1795,9 @@ async function save_settings() {
   const panels = Array.from(document.querySelectorAll('#settings_account_panels .settings-account-panel'));
   const closeToTrayWanted = document.getElementById('closeToTrayToggle').checked;
   const startupWanted = document.getElementById('startupToggle').checked;
+  const promptNextAccountWanted = Boolean(
+    document.getElementById("nextAccountPromptToggle")?.checked
+  );
   const manualSearchDelay = read_manual_search_delay();
 
   if (!manualSearchDelay) {
@@ -1873,16 +1922,27 @@ async function save_settings() {
     // Close-to-tray: persist unconditionally. The backend reads it at next
     // app launch, so saving each time is cheap and avoids a stale state.
     const closeToTrayCall = pywebview.api.set_close_to_tray(closeToTrayWanted);
+    const nextAccountPromptCall = pywebview.api.set_prompt_next_account_after_run(
+      promptNextAccountWanted
+    );
 
-    const results = await Promise.all([...scheduleCalls, startupCall, closeToTrayCall]);
-    const startupOk = results[results.length - 2];
-    const scheduleResults = results.slice(0, -2);
+    const results = await Promise.all([
+      ...scheduleCalls, startupCall, closeToTrayCall, nextAccountPromptCall
+    ]);
+    const nextAccountPromptOk = results[results.length - 1];
+    const startupOk = results[results.length - 3];
+    const scheduleResults = results.slice(0, -3);
     const failures = scheduleResults.filter(ok => !ok).length;
 
     if (failures > 0) {
       show_toast(`${failures} schedule${failures > 1 ? 's' : ''} failed to save.`, 'error');
       return;
     }
+    if (!nextAccountPromptOk) {
+      show_toast("Other settings were saved, but the next-account prompt setting failed.", "warning");
+      return;
+    }
+    promptNextAccountAfterRun = promptNextAccountWanted;
     enable_start_button();
     if (!startupOk && startupInfo && startupInfo.supported) {
       show_toast('Schedules saved, but startup setting failed.', 'warning');
@@ -2197,6 +2257,13 @@ window.addEventListener('pywebviewready', function() {
   pywebview.api.get_settings().then(function(settings) {
     const toggle = document.getElementById('hideBrowserToggle');
     if (toggle) toggle.checked = Boolean(settings.hide_browser);
+  });
+
+  pywebview.api.get_prompt_next_account_after_run().then(function(enabled) {
+    promptNextAccountAfterRun = Boolean(enabled);
+  }).catch(err => {
+    console.error("Failed to load next-account prompt setting:", err);
+    promptNextAccountAfterRun = false;
   });
 
   // Load saved query counts from global settings.
