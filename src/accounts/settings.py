@@ -123,6 +123,8 @@ class GlobalSettingsManager:
             # introduced in v3.3; users who prefer the standard X = quit
             # can flip it off in Settings. Read once at app startup.
             "close_to_tray": True,
+            # Classroom-only walkthrough that simulates account-by-account progress.
+            "demo_sequence_all_accounts": False,
             # "Run it anyway" overrides. status.json remembers what already
             # ran today so a second run of the day skips it; these let the
             # user re-run a task whose saved status they don't trust (e.g. a
@@ -231,6 +233,16 @@ class GlobalSettingsManager:
         """Update the close_to_tray flag in settings."""
         settings = self.settings_for_update()
         settings["close_to_tray"] = bool(value)
+        self.save_settings(settings)
+
+    def get_demo_sequence_all_accounts(self):
+        """Return whether the local sequential-account demo is enabled."""
+        return bool(self.get_settings().get("demo_sequence_all_accounts", False))
+
+    def set_demo_sequence_all_accounts(self, enabled):
+        """Persist the local sequential-account demo toggle."""
+        settings = self.settings_for_update()
+        settings["demo_sequence_all_accounts"] = bool(enabled)
         self.save_settings(settings)
 
     def get_current_account_id(self):

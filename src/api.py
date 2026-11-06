@@ -600,6 +600,17 @@ class AutoRewarderAPI:
         state = "ON (X → tray)" if value else "OFF (X → quit)"
         self.log(f"Close-to-tray: {state}. Restart to apply.")
 
+    def get_demo_sequence_all_accounts(self):
+        """Return whether the classroom-only account sequence demo is enabled."""
+        return self.global_settings.get_demo_sequence_all_accounts()
+
+    def set_demo_sequence_all_accounts(self, enabled):
+        """Persist the classroom-only account sequence demo toggle."""
+        self.global_settings.set_demo_sequence_all_accounts(enabled)
+        state = "ON (simulation only)" if enabled else "OFF"
+        self.log(f"Sequential account demo: {state}")
+        return True
+
     def get_force_tasks(self):
         """Return the force flags for the daily tasks and the visual search."""
         return self.global_settings.get_force_tasks()
