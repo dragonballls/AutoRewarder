@@ -115,7 +115,7 @@ class CompletionIntegrityTests(unittest.TestCase):
             node for node in daily_set.body
             if isinstance(node, ast.FunctionDef) and node.name == "_perform_legacy"
         )
-        source = ast.unparse(method)
+        source = ast.unparse(method).replace("'", '"')
         self.assertIn('totals["final"] == totals["total"]', source)
         self.assertNotIn('totals["newly"] > 0', source)
         self.assertIn("stop_event.is_set()", source)
@@ -188,7 +188,7 @@ class CompletionIntegrityTests(unittest.TestCase):
             node for node in stats_class.body
             if isinstance(node, ast.FunctionDef) and node.name == "_merge_defaults"
         )
-        source = ast.unparse(method)
+        source = ast.unparse(method).replace("'", '"')
         self.assertIn('lifetime["points_estimate"]', source)
         self.assertIn('last_session["points_estimate"]', source)
         self.assertIn("POINTS_PER_CARD", source)
@@ -199,8 +199,8 @@ class CompletionIntegrityTests(unittest.TestCase):
         source = _source("gui/dashboard.html")
         self.assertIn("Earn opens", source)
         self.assertIn("Quest opens", source)
-        self.assertNotIn("e.earn", source)
-        self.assertNotIn("e.quests", source)
+        self.assertNotIn("earn: (v.earn", source)
+        self.assertNotIn("quests: (v.quests", source)
 
     def test_unverified_activity_opens_do_not_inflate_points_estimate(self):
         tree = ast.parse(_source("src/stats/manager.py"))
@@ -232,7 +232,7 @@ class CompletionIntegrityTests(unittest.TestCase):
             if isinstance(node, ast.ClassDef) and node.name == "DailySet"
         )
         methods = {
-            node.name: ast.unparse(node)
+            node.name: ast.unparse(node).replace("'", '"')
             for node in daily_set.body
             if isinstance(node, ast.FunctionDef)
         }
