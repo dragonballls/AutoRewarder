@@ -600,17 +600,6 @@ class AutoRewarderAPI:
         state = "ON (X → tray)" if value else "OFF (X → quit)"
         self.log(f"Close-to-tray: {state}. Restart to apply.")
 
-    def get_demo_sequence_all_accounts(self):
-        """Return whether the classroom-only account sequence demo is enabled."""
-        return self.global_settings.get_demo_sequence_all_accounts()
-
-    def set_demo_sequence_all_accounts(self, enabled):
-        """Persist the classroom-only account sequence demo toggle."""
-        self.global_settings.set_demo_sequence_all_accounts(enabled)
-        state = "ON (simulation only)" if enabled else "OFF"
-        self.log(f"Sequential account demo: {state}")
-        return True
-
     def get_force_tasks(self):
         """Return the force flags for the daily tasks and the visual search."""
         return self.global_settings.get_force_tasks()
@@ -2668,8 +2657,6 @@ class AutoRewarderAPI:
                     self._session_counts.get("pc", 0) > 0
                     or self._session_counts.get("mobile", 0) > 0
                     or self._session_counts.get("cards", 0) > 0
-                    or self._session_counts.get("earn", 0) > 0
-                    or self._session_counts.get("quests", 0) > 0
                 )
 
                 if completed_activity:
@@ -3017,6 +3004,19 @@ class AutoRewarderAPI:
 
         self._visual_search_attempted = True
 
+        # When the Daily Set was skipped earlier in this run, establish a
+        # fresh pre-search baseline before attempting Visual Search. Without a
+        # baseline, an old nonzero streak must not be mistaken for new credit.
+        if getattr(self.daily_set, "visual_search_progress", None) is None:
+            try:
+                self.daily_set.visual_search_progress = (
+                    self.daily_set.read_visual_search_progress(self._driver)
+                )
+            except Exception as e:
+                self.log(
+                    f"[WARNING] Could not read a pre-search Visual Search baseline: {e}"
+                )
+
         used_images = self.daily_set.get_used_visual_search_images()
         mission_url = getattr(self.daily_set, "visual_search_url", None)
 
@@ -3082,6 +3082,12 @@ class AutoRewarderAPI:
                         "Not marked as done for today."
                     )
                     return False
+                elif credited is None:
+                    self.log(
+                        "[WARNING] Visual Search ran, but Rewards completion "
+                        "could not be verified. Not marking it as done."
+                    )
+                    return False
 
                 self.daily_set.mark_visual_search_as_completed()
                 self.log("Visual search marked as done for today.")
@@ -3124,10 +3130,26 @@ class AutoRewarderAPI:
 
         done, total = progress
         before = getattr(self.daily_set, "visual_search_progress", None)
-        was = f" (was {before[0]}/{before[1]})" if before else ""
-        self.log(f"Rewards visual search streak: {done}/{total}{was}")
+        if before is None:
+            self.log(
+                "[WARNING] Visual Search progress has no pre-run baseline; "
+                "credit cannot be confirmed."
+            )
+            return None
 
-        return done > 0
+        before_done, before_total = before
+        if total != before_total:
+            self.log(
+                "[WARNING] Visual Search mission changed during verification; "
+                "credit cannot be confirmed."
+            )
+            return None
+
+        self.log(
+            f"Rewards visual search streak: {done}/{total} "
+            f"(was {before_done}/{before_total})"
+        )
+        return done > before_done
 
     def _run_phase(self, mobile, count, do_daily_set, search_delay_range):
         """

@@ -11,20 +11,10 @@ let driverWarmingUp = false;
 // True while a balance scrape holds a driver (launch refresh, manual refresh,
 // or account-switch refresh). Start must stay disabled during it too.
 let balanceFetching = false;
-// The sequential account walkthrough is an offline classroom simulation.
-let demoSequenceAllAccounts = false;
-let demoSequenceModeLoaded = false;
-let demoSequenceRunning = false;
-let demoSequenceStopRequested = false;
-
 function can_start_current_mode() {
-  if (!demoSequenceModeLoaded || driverWarmingUp || balanceFetching || demoSequenceRunning) {
-    return false;
-  }
+  if (driverWarmingUp || balanceFetching) return false;
   const current = accountsCache.find(a => a.id === currentAccountId);
-  const canDemo = demoSequenceAllAccounts && accountsCache.length > 0;
-  const canRunCurrent = Boolean(current && current.first_setup_done);
-  return canDemo || canRunCurrent;
+  return Boolean(current && current.first_setup_done);
 }
 
 // =========================================================================
@@ -371,16 +361,6 @@ function update_log_once(message) {
 // =========================================================================
 
 function start_bot() {
-  // This mode is deliberately a local simulation and never calls the Rewards runner.
-  if (demoSequenceAllAccounts) {
-    if (!accountsCache.length) {
-      show_toast("Add an account first.", "warning");
-      return;
-    }
-    run_demo_account_sequence();
-    return;
-  }
-
   if (!currentAccountId) {
     show_toast('Add an account first.', 'warning');
     return;
@@ -437,61 +417,6 @@ function start_bot() {
 
   update_status_indicator('executing');
   pywebview.api.main(pc, mobile, dailyOnly, 'manual');
-}
-
-async function run_demo_account_sequence() {
-  if (demoSequenceRunning) return;
-
-  const demoAccounts = accountsCache.slice();
-  if (!demoAccounts.length) {
-    show_toast("Add an account first.", "warning");
-    return;
-  }
-
-  demoSequenceRunning = true;
-  demoSequenceStopRequested = false;
-  const startBtn = document.getElementById("start_btn");
-  const startLabel = startBtn && startBtn.querySelector(".btn-label");
-  if (startBtn) startBtn.disabled = true;
-  if (startLabel) startLabel.textContent = "Demo running…";
-
-  const stopBtn = document.getElementById("stop_btn");
-  if (stopBtn) {
-    stopBtn.disabled = false;
-    const stopLabel = stopBtn.querySelector(".stop-label");
-    if (stopLabel) stopLabel.textContent = "Stop";
-  }
-  const testBtn = document.getElementById("test_activities_btn");
-  if (testBtn) testBtn.disabled = true;
-
-  let completed = 0;
-  update_status_indicator("executing");
-  update_log("[DEMO] Sequential account walkthrough started. Simulation only; no browser or Rewards activity will run.");
-
-  try {
-    for (let index = 0; index < demoAccounts.length; index++) {
-      if (demoSequenceStopRequested) break;
-      const account = demoAccounts[index];
-      const label = account.label || `Account ${index + 1}`;
-      update_log(`[DEMO] ${index + 1}/${demoAccounts.length}: ${label} — simulated run started.`);
-
-      await new Promise(resolve => setTimeout(resolve, 700));
-      if (demoSequenceStopRequested) break;
-
-      update_log(`[DEMO] ${label} — simulated run completed. No tasks were executed and no points were collected.`);
-      completed++;
-    }
-
-    if (demoSequenceStopRequested) {
-      update_log(`[DEMO] Stopped after ${completed} of ${demoAccounts.length} accounts.`);
-    } else {
-      update_log(`[DEMO] Sequence complete: ${completed} of ${demoAccounts.length} accounts demonstrated.`);
-    }
-  } finally {
-    demoSequenceRunning = false;
-    demoSequenceStopRequested = false;
-    enable_start_button();
-  }
 }
 
 async function test_reward_activities() {
@@ -583,7 +508,7 @@ function enable_start_button() {
   btn.disabled = !canRun;
 
   const testBtn = document.getElementById('test_activities_btn');
-  if (testBtn) testBtn.disabled = !(current && current.first_setup_done) || driverWarmingUp || balanceFetching || demoSequenceRunning;
+  if (testBtn) testBtn.disabled = !(current && current.first_setup_done) || driverWarmingUp || balanceFetching;
 
   // Stop button is meaningful only while a run is in progress.
   const stopBtn = document.getElementById('stop_btn');
@@ -596,17 +521,6 @@ function enable_start_button() {
 }
 
 function stop_bot() {
-  if (demoSequenceRunning) {
-    demoSequenceStopRequested = true;
-    const stopBtn = document.getElementById("stop_btn");
-    if (stopBtn) {
-      stopBtn.disabled = true;
-      const stopLabel = stopBtn.querySelector(".stop-label");
-      if (stopLabel) stopLabel.textContent = "Stopping…";
-    }
-    update_log("[DEMO] Stop requested. The current simulated step will finish, then the sequence will stop.");
-    return;
-  }
   if (!window.pywebview || !pywebview.api || !pywebview.api.stop) return;
   const stopBtn = document.getElementById('stop_btn');
   if (stopBtn) {
@@ -1028,12 +942,11 @@ function open_settings_modal(panelId) {
     pywebview.api.get_all_schedules(),
     pywebview.api.get_launch_on_startup(),
     pywebview.api.get_close_to_tray(),
-    pywebview.api.get_demo_sequence_all_accounts(),
     pywebview.api.get_llm_config(),
     pywebview.api.get_force_tasks(),
     pywebview.api.get_app_info(),
     pywebview.api.get_manual_search_delay(),
-  ]).then(([schedules, startup, closeToTray, demoSequence, llmConfig, forceTasks, appInfo, manualSearchDelay]) => {
+  ]).then(([schedules, startup, closeToTray, llmConfig, forceTasks, appInfo, manualSearchDelay]) => {
     render_account_panels(Array.isArray(schedules) ? schedules : []);
 
     // Background auto-run toggle — disable row on unsupported OS.
@@ -1050,11 +963,6 @@ function open_settings_modal(panelId) {
       startupToggle.disabled = false;
       startupHint.textContent = "Automatically run AutoRewarder in the background at each account's scheduled time.";
     }
-
-    // Classroom-only sequence demo toggle — default to off if the API failed.
-    demoSequenceAllAccounts = Boolean(demoSequence);
-    const demoSequenceToggle = document.getElementById("demoSequenceToggle");
-    if (demoSequenceToggle) demoSequenceToggle.checked = demoSequenceAllAccounts;
 
     // Close-to-tray toggle — default to true if the API failed.
     const trayToggle = document.getElementById('closeToTrayToggle');
@@ -1841,7 +1749,6 @@ async function save_settings() {
   const panels = Array.from(document.querySelectorAll('#settings_account_panels .settings-account-panel'));
   const closeToTrayWanted = document.getElementById('closeToTrayToggle').checked;
   const startupWanted = document.getElementById('startupToggle').checked;
-  const demoSequenceWanted = Boolean(document.getElementById('demoSequenceToggle')?.checked);
   const manualSearchDelay = read_manual_search_delay();
 
   if (!manualSearchDelay) {
@@ -1966,23 +1873,16 @@ async function save_settings() {
     // Close-to-tray: persist unconditionally. The backend reads it at next
     // app launch, so saving each time is cheap and avoids a stale state.
     const closeToTrayCall = pywebview.api.set_close_to_tray(closeToTrayWanted);
-    const demoSequenceCall = pywebview.api.set_demo_sequence_all_accounts(demoSequenceWanted);
 
-    const results = await Promise.all([...scheduleCalls, startupCall, closeToTrayCall, demoSequenceCall]);
-    const demoSequenceOk = results[results.length - 1];
-    const startupOk = results[results.length - 3];
-    const scheduleResults = results.slice(0, -3);
+    const results = await Promise.all([...scheduleCalls, startupCall, closeToTrayCall]);
+    const startupOk = results[results.length - 2];
+    const scheduleResults = results.slice(0, -2);
     const failures = scheduleResults.filter(ok => !ok).length;
 
     if (failures > 0) {
       show_toast(`${failures} schedule${failures > 1 ? 's' : ''} failed to save.`, 'error');
       return;
     }
-    if (!demoSequenceOk) {
-      show_toast('Schedules saved, but the sequential demo setting failed to save.', 'warning');
-      return;
-    }
-    demoSequenceAllAccounts = demoSequenceWanted;
     enable_start_button();
     if (!startupOk && startupInfo && startupInfo.supported) {
       show_toast('Schedules saved, but startup setting failed.', 'warning');
@@ -2297,17 +2197,6 @@ window.addEventListener('pywebviewready', function() {
   pywebview.api.get_settings().then(function(settings) {
     const toggle = document.getElementById('hideBrowserToggle');
     if (toggle) toggle.checked = Boolean(settings.hide_browser);
-  });
-
-  pywebview.api.get_demo_sequence_all_accounts().then(function(enabled) {
-    demoSequenceAllAccounts = Boolean(enabled);
-    demoSequenceModeLoaded = true;
-    enable_start_button();
-  }).catch(err => {
-    console.error('Failed to load sequential demo setting:', err);
-    demoSequenceAllAccounts = false;
-    demoSequenceModeLoaded = true;
-    enable_start_button();
   });
 
   // Load saved query counts from global settings.

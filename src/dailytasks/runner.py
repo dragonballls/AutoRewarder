@@ -125,7 +125,9 @@ class DailySet:
         try:
             with open(self.status_file, "r", encoding="utf-8") as file:
                 data = json.load(file)
-                return data.get("last_daily_set_date") != today
+                # Ignore dates written by older versions that could mark a
+                # partial run as complete. Only a verified marker is trusted.
+                return data.get("last_daily_set_verified_date") != today
         except Exception:
             self._log(f"[ERROR] Failed to read status file: {self.status_file}")
             return True
@@ -142,7 +144,8 @@ class DailySet:
             except Exception:
                 self._log(f"[ERROR] Failed to read status file: {self.status_file}")
 
-        data["last_daily_set_date"] = today
+        data.pop("last_daily_set_date", None)
+        data["last_daily_set_verified_date"] = today
 
         # Atomic write to reduce the chance of leaving a partially-written JSON file.
         os.makedirs(os.path.dirname(self.status_file), exist_ok=True)
@@ -170,7 +173,9 @@ class DailySet:
             with open(self.status_file, "r", encoding="utf-8") as file:
                 data = json.load(file)
 
-                return data.get("last_visual_search_date") != today
+                # Old markers may have been written after a results page loaded
+                # without Rewards confirming credit. Trust only verified markers.
+                return data.get("last_visual_search_verified_date") != today
 
         except Exception:
             self._log(f"[ERROR] Failed to read status file: {self.status_file}")
@@ -189,7 +194,8 @@ class DailySet:
             except Exception:
                 self._log(f"[ERROR] Failed to read status file: {self.status_file}")
 
-        data["last_visual_search_date"] = today
+        data.pop("last_visual_search_date", None)
+        data["last_visual_search_verified_date"] = today
 
         os.makedirs(os.path.dirname(self.status_file), exist_ok=True)
 
@@ -355,6 +361,7 @@ class DailySet:
             f"attempting {len(incomplete_indices)} remaining."
         )
 
+        attempted = 0
         for idx in incomplete_indices:
             if stop_event is not None and stop_event.is_set():
                 self._log(f"Stop requested — halting {section_name} loop.")
@@ -388,9 +395,10 @@ class DailySet:
             else:
                 self._log(f"  → {section_name} #{idx + 1}: clicking…")
 
-            self.cards.click(
+            if self.cards.click(
                 target_card, human, main_tab, label=label, stop_event=stop_event
-            )
+            ):
+                attempted += 1
 
         # If the user stopped, skip the post-run validation entirely — the
         # driver is dead and we don't want to log misleading 0/N counts.
@@ -400,7 +408,7 @@ class DailySet:
                 "newly": 0,
                 "final": already_complete,
                 "total": total_actionable,
-                "attempted": len(incomplete_indices),
+                "attempted": attempted,
             }
 
         # Settle so MS has time to reflect earned points back to the card UI.
@@ -413,15 +421,15 @@ class DailySet:
         ]
         if not final_cards:
             self._log(
-                f"[WARNING] {section_name} cards vanished after run; "
-                f"assuming attempted."
+                f"[WARNING] {section_name} cards could not be re-read after the run; "
+                "no new completion is credited."
             )
             return {
                 "already": already_complete,
                 "newly": 0,
                 "final": already_complete,
                 "total": total_actionable,
-                "attempted": len(incomplete_indices),
+                "attempted": attempted,
             }
 
         # Re-tally excluding both locked and excluded (sweepstake) cards.
@@ -446,7 +454,7 @@ class DailySet:
             "newly": newly_completed,
             "final": final_complete,
             "total": final_actionable,
-            "attempted": len(incomplete_indices),
+            "attempted": attempted,
         }
 
     # -- Top-level entry point -------------------------------------------------
@@ -465,8 +473,8 @@ class DailySet:
                 on the instance. "auto" detects which dashboard rendered.
 
         Returns:
-            bool: True if it's reasonable to mark today as done, False if we
-                  made no progress (so the next run can retry).
+            bool: True only when every actionable card is verified complete.
+                  Partial or unverified progress stays eligible for retry.
         """
         # Reset here so every path (legacy, new, aborted-early) starts from
         # zeros and the stats layer never folds in counts from a prior run.
@@ -576,12 +584,10 @@ class DailySet:
         clicked card's status is re-checked after the run to validate progress.
 
         Returns:
-            bool: True if it's reasonable to mark today as done — either all
-                  known cards are now complete, or at least one new card was
-                  completed this run. Returns False only when we made zero
-                  progress despite having incomplete cards (likely a real
-                  failure: broken selectors, login redirect, anti-bot), so
-                  the next run can retry.
+            bool: True only when every currently-actionable card is verified
+                  complete. Partial progress, failed clicks, and incomplete
+                  reads return False so unfinished cards remain eligible for
+                  retry.
         """
         self._log("Performing daily Rewards tasks")
 
@@ -644,33 +650,28 @@ class DailySet:
             # Expose the run's aggregated counts for the stats layer.
             self.last_totals = dict(totals)
 
+            if stop_event is not None and stop_event.is_set():
+                self._log(
+                    "Rewards tasks stopped before all sections could be verified."
+                )
+                return False
+
             if totals["total"] == 0:
                 self._log("[WARNING] No Rewards cards found across any section.")
                 return False
 
             self._log(
-                f"All sections: {totals['final']}/{totals['total']} complete "
+                f"All sections: {totals['final']}/{totals['total']} verified complete "
                 f"(+{totals['newly']} this run)."
             )
 
             if totals["final"] == totals["total"]:
                 return True
 
-            if totals["newly"] > 0:
-                self._log(
-                    "[INFO] Some Rewards cards still incomplete after run "
-                    "(likely quizzes / polls that need manual answers). "
-                    "Marking today done to avoid retries."
-                )
-                return True
-
-            if totals["attempted"] == 0:
-                # Nothing was incomplete to begin with → already-done state.
-                return True
-
             self._log(
-                "[WARNING] No Rewards cards were completed this run. "
-                "Will retry on next run."
+                f"[WARNING] Rewards tasks remain incomplete "
+                f"({totals['final']}/{totals['total']} verified complete). "
+                "The day will remain unmarked so unfinished cards can be retried."
             )
             return False
 

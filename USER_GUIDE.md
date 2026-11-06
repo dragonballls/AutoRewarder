@@ -123,10 +123,6 @@ Adding another account is slightly different, so please follow these steps:
 > [!TIP]
 > Closing the main window sends AutoRewarder to the system tray. Use the tray icon to reopen the window or choose **Exit** to fully close the app.
 
-### Sequential account demonstration
-
-For a classroom walkthrough, open **Settings → General** and enable **Demo: sequence all accounts**. The existing **Start run** button then walks through every configured account in the order shown by the account manager, logs a simulated start and completion for each account, and returns to the normal ready state. **Stop** interrupts the walkthrough. This mode is an offline UI demonstration only: it does not open Edge, sign in, perform searches or daily activities, or collect points. Turn the setting off to return to the normal single-account Start run behavior.
-
 ### What's Happening?
 
 - AutoRewarder opens Microsoft Edge (you can see it if hide-browser is off)
@@ -136,10 +132,10 @@ For a classroom walkthrough, open **Settings → General** and enable **Demo: se
 - It may occasionally switch to Images/Videos/News tabs
 - It may take short "coffee breaks" during longer sessions
 - If Schedule is enabled and Advanced scheduling is on, the run is paced across the schedule duration using the queries-per-hour target. You will see a clear "Done!" message in the logs when the advanced scheduling run fully completes.
-- After the PC phase, it collects Daily Set + "More Activities" click-through tasks (once per day, per account). Locked cards, sweepstakes and promo banners are automatically skipped — only point-earning tasks are clicked
+- After the PC phase, it attempts the visible Daily Set + "More Activities" actions. A Daily Set is marked complete only after a fresh dashboard read verifies every original actionable card is complete; otherwise it remains eligible for retry.
 - After the existing daily-task and Visual Search steps, it makes one read-only pass over the Rewards dashboard and /earn page to identify Read to Earn, Explore on Bing, and other visible activity types. Results appear in the Activity log for you to review and complete yourself.
 - The activity-discovery pass does not open activity cards, run searches, read articles, answer quizzes or polls, or claim points.
-- If the Visual Search task isn't completed, it will be completed as part of the daily task flow or after PC phase.
+- Visual Search is attempted after the PC phase. The app marks it complete only when Rewards progress increases from a recorded pre-run baseline; otherwise it reports that credit could not be verified and leaves it unmarked.
 - The process continues until all searches are complete, or until you click **Stop**
 - You'll see updates in the log window
 
@@ -147,7 +143,7 @@ If a new version is available, AutoRewarder can show an update notification and 
 
 ### Daily tasks only
 
-If you've already done your searches manually (or just want to clean up the dashboard quickly), enable the **"Daily tasks only"** toggle before starting. The run skips both Bing search phases and goes straight to the Rewards dashboard to harvest the Daily Set/More Activities cards + Visual Search task.
+If you've already done your searches manually (or just want to clean up the dashboard quickly), enable the **"Daily tasks only"** toggle before starting. The run skips both Bing search phases and opens the Rewards dashboard to attempt the Daily Set/More Activities actions and Visual Search. Unverified work is not recorded as complete.
 
 Anything already marked as done for today is skipped, and the log says so — see [Force daily tasks & visual search](#force-daily-tasks--visual-search) to run it again anyway.
 

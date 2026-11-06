@@ -4,10 +4,9 @@ Statistics storage + points-balance scraping for a single account.
 Two complementary data sources feed the dashboard (see the design choice in
 the GUI):
 
-  * Activity counters — exact counts of PC / Mobile searches and Daily Set
-    cards completed, accumulated from each run. These drive an *estimated*
-    points figure (counters x per-item constants) used as a fallback when the
-    real balance can't be scraped.
+  * Activity counters — PC / Mobile searches and verified Daily Set cards.
+    Separately, /earn and quest counters record activities opened, not points
+    earned. Only searches and verified Daily Set cards contribute to estimates.
   * Real balance — the actual "available points" number scraped from
     rewards.bing.com at the end of a run that visits it. This is the source of
     truth for the total, and successive scrapes give the points delta for a
@@ -287,6 +286,29 @@ class StatsManager:
             if isinstance(stored, dict):
                 merged[section].update(stored)
 
+        # Older versions added /earn and quest opens to the estimated-points
+        # total even though those actions were not verified as credited.
+        # Rebuild both estimates from the trustworthy counters so existing
+        # profiles are corrected when they are next read.
+        def _count(value):
+            try:
+                return max(0, int(value or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        lifetime = merged["lifetime"]
+        lifetime["points_estimate"] = (
+            _count(lifetime.get("pc_searches")) * POINTS_PER_SEARCH
+            + _count(lifetime.get("mobile_searches")) * POINTS_PER_SEARCH
+            + _count(lifetime.get("daily_cards")) * POINTS_PER_CARD
+        )
+        last_session = merged["last_session"]
+        last_session["points_estimate"] = (
+            _count(last_session.get("pc_searches")) * POINTS_PER_SEARCH
+            + _count(last_session.get("mobile_searches")) * POINTS_PER_SEARCH
+            + _count(last_session.get("daily_cards")) * POINTS_PER_CARD
+        )
+
         # Prefer the new per-day aggregates; otherwise migrate from any legacy
         # per-run `runs` list left in an older stats.json.
         daily = data.get("daily")
@@ -371,8 +393,8 @@ class StatsManager:
             pc_searches (int): successful PC searches this run.
             mobile_searches (int): successful Mobile searches this run.
             daily_cards (int): Daily Set cards newly completed (verified).
-            earn_cards (int): /earn point-earning cards opened this run.
-            quest_tasks (int): quest punchcard tasks opened this run.
+            earn_cards (int): /earn activities opened this run (not verified credit).
+            quest_tasks (int): quest tasks opened this run (not verified credit).
             balance (int | None): scraped real balance, or None if unavailable.
 
         Returns:
@@ -397,10 +419,13 @@ class StatsManager:
             return self.get_stats()
 
         stats = self.get_stats()
+        # /earn and quest counters currently describe opens/attempts only.
+        # They must not be presented as earned points without independent
+        # Rewards-side completion verification.
         session_estimate = (
             pc * POINTS_PER_SEARCH
             + mobile * POINTS_PER_SEARCH
-            + (cards + earn + quests) * POINTS_PER_CARD
+            + cards * POINTS_PER_CARD
         )
 
         lifetime = stats["lifetime"]

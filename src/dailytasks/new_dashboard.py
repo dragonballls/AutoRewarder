@@ -335,6 +335,56 @@ try {
 """
 
 
+def _verified_daily_set_counts(before_items, after_items):
+    """
+    Compare the same Daily Set activities before and after a run.
+
+    A complete post-run snapshot must contain every original activity under a
+    stable offerId/hash/destination identity. Missing or unidentified records
+    are not treated as completed.
+    """
+    if not isinstance(before_items, list) or not before_items:
+        return None
+    if not isinstance(after_items, list) or not after_items:
+        return None
+
+    def identity(item):
+        if not isinstance(item, dict):
+            return None
+        for field in ("offerId", "hash", "destination"):
+            value = item.get(field)
+            if isinstance(value, (str, int)) and str(value).strip():
+                return (field, str(value).strip())
+        return None
+
+    before_by_key = {}
+    for item in before_items:
+        key = identity(item)
+        if key is None or key in before_by_key:
+            return None
+        before_by_key[key] = item
+
+    after_by_key = {}
+    for item in after_items:
+        key = identity(item)
+        if key is not None:
+            after_by_key[key] = item
+
+    if any(key not in after_by_key for key in before_by_key):
+        return None
+
+    final = sum(
+        1 for key in before_by_key if after_by_key[key].get("isCompleted") is True
+    )
+    newly = sum(
+        1
+        for key, item in before_by_key.items()
+        if item.get("isCompleted") is not True
+        and after_by_key[key].get("isCompleted") is True
+    )
+    return {"total": len(before_by_key), "final": final, "newly": newly}
+
+
 class NewDashboardDailySet:
     """Daily Set handler for the new Next.js Microsoft Rewards dashboard."""
 
@@ -394,7 +444,7 @@ class NewDashboardDailySet:
                 continue
             prev = by_id.get(key)
             if prev is None or (
-                item.get("isCompleted") and not prev.get("isCompleted")
+                item.get("isCompleted") is True and prev.get("isCompleted") is not True
             ):
                 by_id[key] = item
         return list(by_id.values())
@@ -954,7 +1004,10 @@ class NewDashboardDailySet:
             human.click_element(btn, scroll_into_view=True)
             time.sleep(random.uniform(1.5, 2.5))
             self.last_totals["attempted"] = self.last_totals.get("attempted", 0) + 1
-            self._log("Clicked claim — pending points submitted.")
+            self._log(
+                "Claim control clicked; Rewards balance has not yet confirmed "
+                "that the points were added."
+            )
         except Exception as e:
             if stop_event is not None and stop_event.is_set():
                 return
@@ -1218,7 +1271,7 @@ class NewDashboardDailySet:
                 f"New dashboard daily set: read {len(todays)} item(s) via {source}."
             )
 
-            incomplete = [it for it in todays if not it.get("isCompleted")]
+            incomplete = [it for it in todays if it.get("isCompleted") is not True]
             total = len(todays)
             already = total - len(incomplete)
             self.last_totals = {
@@ -1247,7 +1300,7 @@ class NewDashboardDailySet:
                 if stop_event is not None and stop_event.is_set():
                     self._log("Stop requested — halting new-dashboard daily set.")
                     break
-                if item.get("isCompleted"):
+                if item.get("isCompleted") is True:
                     continue
 
                 destination = item.get("destination")
@@ -1305,28 +1358,28 @@ class NewDashboardDailySet:
                 driver.get(DASHBOARD_URL)
                 self._wait_ready(driver)
                 time.sleep(random.uniform(1.5, 2.5))
-                # The re-read can race a still-streaming (partial) snapshot; one
-                # missing cards would make them look completed and inflate
-                # `newly`. Only trust a snapshot that covers at least as many
-                # cards as we started with — retry (JSON then DOM) until it does.
+                # Retry while the page streams until every original activity is
+                # present under the same stable identity. Merely having the same
+                # number of cards is not sufficient proof of a complete snapshot.
                 after = []
+                verified_counts = None
                 for _ in range(5):
-                    # Same source arbitration as the initial read: a partial
-                    # (or other-day) JSON snapshot must not beat the DOM, or
-                    # missing cards would be counted as completed.
+                    # Same source arbitration as the initial read: JSON and DOM
+                    # snapshots are both considered, but each original card must
+                    # still be identifiable before its state is trusted.
                     after, _src = self._choose_today(
                         self._todays_items(self._read_items(driver)),
                         self._todays_items(self._read_items_dom(driver)),
                     )
-                    if len(after) >= len(todays):
+                    verified_counts = _verified_daily_set_counts(todays, after)
+                    if verified_counts is not None:
                         break
                     time.sleep(1.5)
-                if after and len(after) >= len(todays):
+                if verified_counts is not None:
                     verified = True
-                    still_incomplete = sum(
-                        1 for it in after if not it.get("isCompleted")
-                    )
-                    newly = max(0, len(incomplete) - still_incomplete)
+                    newly = verified_counts["newly"]
+                    self.last_totals["total"] = verified_counts["total"]
+                    self.last_totals["final"] = verified_counts["final"]
                 else:
                     self._log(
                         "[INFO] Post-run snapshot incomplete "
@@ -1338,22 +1391,23 @@ class NewDashboardDailySet:
 
             self.last_totals["attempted"] = attempted
             self.last_totals["newly"] = newly
-            self.last_totals["final"] = already + newly
 
-            if newly > 0:
-                self._log(f"New dashboard daily set: +{newly} completed this run.")
+            if verified and self.last_totals["final"] == self.last_totals["total"]:
+                self._log(
+                    f"New dashboard daily set: all {self.last_totals['total']} "
+                    f"activities verified complete (+{newly} this run)."
+                )
                 return True
 
             if verified:
-                # We could re-read the cards and they are still incomplete: the
-                # visits did not credit (common in headless — Rewards often won't
-                # credit a headless session) or the items are quizzes needing
-                # manual answers. Report honestly and don't mark today done, so a
-                # later (visible) run can retry.
+                # Some activities remain incomplete after re-reading the exact
+                # same cards. Keep the daily status unmarked so they can be retried.
+                remaining = self.last_totals["total"] - self.last_totals["final"]
                 self._log(
-                    "[WARNING] Daily-set activities were opened but none are marked "
-                    "complete on the dashboard. Not marking today done — if this is "
-                    "a headless run, try again with the browser visible."
+                    f"[WARNING] Daily Set remains incomplete: "
+                    f"{self.last_totals['final']}/{self.last_totals['total']} "
+                    f"verified complete ({remaining} remaining). "
+                    "Not marking today done."
                 )
             else:
                 self._log(
