@@ -103,7 +103,6 @@ class ExistingWindowIntegrationTests(unittest.TestCase):
             self.assertNotIn("capture_dashboard_activities", source, path)
 
 
-
 class CompletionIntegrityTests(unittest.TestCase):
     def test_legacy_daily_set_requires_every_actionable_card_complete(self):
         tree = ast.parse(_source("src/dailytasks/runner.py"))
