@@ -444,7 +444,8 @@ class NewDashboardDailySet:
                 continue
             prev = by_id.get(key)
             if prev is None or (
-                item.get("isCompleted") and not prev.get("isCompleted")
+                item.get("isCompleted") is True
+                and prev.get("isCompleted") is not True
             ):
                 by_id[key] = item
         return list(by_id.values())
@@ -1271,7 +1272,9 @@ class NewDashboardDailySet:
                 f"New dashboard daily set: read {len(todays)} item(s) via {source}."
             )
 
-            incomplete = [it for it in todays if not it.get("isCompleted")]
+            incomplete = [
+                it for it in todays if it.get("isCompleted") is not True
+            ]
             total = len(todays)
             already = total - len(incomplete)
             self.last_totals = {
@@ -1300,7 +1303,7 @@ class NewDashboardDailySet:
                 if stop_event is not None and stop_event.is_set():
                     self._log("Stop requested — halting new-dashboard daily set.")
                     break
-                if item.get("isCompleted"):
+                if item.get("isCompleted") is True:
                     continue
 
                 destination = item.get("destination")
