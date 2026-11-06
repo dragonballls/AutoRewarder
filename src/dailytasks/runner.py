@@ -423,7 +423,7 @@ class DailySet:
                 "newly": 0,
                 "final": already_complete,
                 "total": total_actionable,
-                "attempted": len(incomplete_indices),
+                "attempted": attempted,
             }
 
         # Re-tally excluding both locked and excluded (sweepstake) cards.
@@ -448,7 +448,7 @@ class DailySet:
             "newly": newly_completed,
             "final": final_complete,
             "total": final_actionable,
-            "attempted": len(incomplete_indices),
+            "attempted": attempted,
         }
 
     # -- Top-level entry point -------------------------------------------------
@@ -467,8 +467,8 @@ class DailySet:
                 on the instance. "auto" detects which dashboard rendered.
 
         Returns:
-            bool: True if it's reasonable to mark today as done, False if we
-                  made no progress (so the next run can retry).
+            bool: True only when every actionable card is verified complete.
+                  Partial or unverified progress stays eligible for retry.
         """
         # Reset here so every path (legacy, new, aborted-early) starts from
         # zeros and the stats layer never folds in counts from a prior run.
@@ -578,12 +578,10 @@ class DailySet:
         clicked card's status is re-checked after the run to validate progress.
 
         Returns:
-            bool: True if it's reasonable to mark today as done — either all
-                  known cards are now complete, or at least one new card was
-                  completed this run. Returns False only when we made zero
-                  progress despite having incomplete cards (likely a real
-                  failure: broken selectors, login redirect, anti-bot), so
-                  the next run can retry.
+            bool: True only when every currently-actionable card is verified
+                  complete. Partial progress, failed clicks, and incomplete
+                  reads return False so unfinished cards remain eligible for
+                  retry.
         """
         self._log("Performing daily Rewards tasks")
 
