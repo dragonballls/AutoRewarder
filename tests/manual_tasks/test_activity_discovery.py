@@ -9,7 +9,7 @@ import sys
 # Import this isolated module without importing src/__init__.py and the full app.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from manual_tasks.activity_discovery import (  # noqa: E402
+from manual_tasks.activity_discovery import (  # type: ignore[import-not-found]  # noqa: E402
     ActivityKind,
     ActivityStatus,
     capture_dashboard_activities,
