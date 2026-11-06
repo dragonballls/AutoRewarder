@@ -800,7 +800,10 @@ class AutoRewarderAPI:
             self.log("[ACTIVITY TEST] Wait for the existing browser warmup to finish.")
             return {"ok": False, "reason": "driver_loading"}
         if self._balance_lock.locked():
-            self.log("[ACTIVITY TEST] A balance refresh is using this account profile. Try again when it finishes.")
+            self.log(
+                "[ACTIVITY TEST] A balance refresh is using this account profile. "
+                "Try again when it finishes."
+            )
             return {"ok": False, "reason": "balance_refresh"}
         if not self._run_lock.acquire(blocking=False):
             self.log("[ACTIVITY TEST] Another run is active. Test skipped.")
@@ -2702,14 +2705,17 @@ class AutoRewarderAPI:
         try:
             activities = capture_dashboard_activities(driver)
         except Exception as exc:
-            self.log(f"[ACTIVITY {source}] Read-only discovery unavailable: {type(exc).__name__}: {exc}")
+            self.log(
+                f"[ACTIVITY {source}] Read-only discovery unavailable: "
+                f"{type(exc).__name__}: {exc}"
+            )
             return []
 
         prefix = f"[ACTIVITY {source}]"
         if not activities:
             self.log(
                 f"{prefix} No Read to Earn / Explore / other activity cards were "
-                "recognized. This is a detection result, not proof that none are available."
+                "recognized. This does not prove none are available."
             )
             return []
 
@@ -2725,10 +2731,17 @@ class AutoRewarderAPI:
             f"({summary}). All actions remain manual."
         )
         for activity in activities:
-            points = f", {activity.points} points shown" if activity.points is not None else ""
+            points = (
+                f", {activity.points} points shown"
+                if activity.points is not None
+                else ""
+            )
             progress = (
                 f", progress {activity.progress_done}/{activity.progress_total}"
-                if activity.progress_done is not None and activity.progress_total is not None
+                if (
+                    activity.progress_done is not None
+                    and activity.progress_total is not None
+                )
                 else ""
             )
             self.log(
@@ -2869,7 +2882,10 @@ class AutoRewarderAPI:
             # Run the visual search even if the Daily Set failed or was skipped.
             if not self._stop_event.is_set():
                 self._run_visual_search_if_needed()
-            if not self._stop_event.is_set() and not self._activity_discovery_attempted:
+            if (
+                not self._stop_event.is_set()
+                and not self._activity_discovery_attempted
+            ):
                 self._activity_discovery_attempted = True
                 self._review_activity_discovery(self._driver, source="RUN")
 
@@ -3214,7 +3230,10 @@ class AutoRewarderAPI:
             # The first desktop/mobile phase adds a read-only activity review to
             # the existing run order. It does not click, search, read, answer,
             # claim, or otherwise change any Rewards activity.
-            if not self._activity_discovery_attempted and not self._stop_event.is_set():
+            if (
+                not self._activity_discovery_attempted
+                and not self._stop_event.is_set()
+            ):
                 self._activity_discovery_attempted = True
                 self._review_activity_discovery(self._driver, source="RUN")
 
