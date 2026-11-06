@@ -125,7 +125,9 @@ class DailySet:
         try:
             with open(self.status_file, "r", encoding="utf-8") as file:
                 data = json.load(file)
-                return data.get("last_daily_set_date") != today
+                # Ignore dates written by older versions that could mark a
+                # partial run as complete. Only a verified marker is trusted.
+                return data.get("last_daily_set_verified_date") != today
         except Exception:
             self._log(f"[ERROR] Failed to read status file: {self.status_file}")
             return True
@@ -142,7 +144,8 @@ class DailySet:
             except Exception:
                 self._log(f"[ERROR] Failed to read status file: {self.status_file}")
 
-        data["last_daily_set_date"] = today
+        data.pop("last_daily_set_date", None)
+        data["last_daily_set_verified_date"] = today
 
         # Atomic write to reduce the chance of leaving a partially-written JSON file.
         os.makedirs(os.path.dirname(self.status_file), exist_ok=True)
@@ -170,7 +173,9 @@ class DailySet:
             with open(self.status_file, "r", encoding="utf-8") as file:
                 data = json.load(file)
 
-                return data.get("last_visual_search_date") != today
+                # Old markers may have been written after a results page loaded
+                # without Rewards confirming credit. Trust only verified markers.
+                return data.get("last_visual_search_verified_date") != today
 
         except Exception:
             self._log(f"[ERROR] Failed to read status file: {self.status_file}")
@@ -189,7 +194,8 @@ class DailySet:
             except Exception:
                 self._log(f"[ERROR] Failed to read status file: {self.status_file}")
 
-        data["last_visual_search_date"] = today
+        data.pop("last_visual_search_date", None)
+        data["last_visual_search_verified_date"] = today
 
         os.makedirs(os.path.dirname(self.status_file), exist_ok=True)
 
