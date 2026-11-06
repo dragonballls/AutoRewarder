@@ -175,7 +175,32 @@ class CompletionIntegrityTests(unittest.TestCase):
         run = ast.unparse(_api_method("_run_visual_search_if_needed"))
         self.assertIn("before is None", check)
         self.assertIn("done > before_done", check)
+        self.assertIn("read_visual_search_progress(self._driver)", run)
         self.assertIn("elif credited is None", run)
+
+    def test_saved_points_estimates_are_migrated_away_from_unverified_opens(self):
+        tree = ast.parse(_source("src/stats/manager.py"))
+        stats_class = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "StatsManager"
+        )
+        method = next(
+            node for node in stats_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_merge_defaults"
+        )
+        source = ast.unparse(method)
+        self.assertIn('lifetime["points_estimate"]', source)
+        self.assertIn('last_session["points_estimate"]', source)
+        self.assertIn("POINTS_PER_CARD", source)
+        self.assertNotIn("earn_cards", source)
+        self.assertNotIn("quest_tasks", source)
+
+    def test_dashboard_does_not_plot_opened_activities_as_earned_points(self):
+        source = _source("gui/dashboard.html")
+        self.assertIn("Earn opens", source)
+        self.assertIn("Quest opens", source)
+        self.assertNotIn("e.earn", source)
+        self.assertNotIn("e.quests", source)
 
     def test_unverified_activity_opens_do_not_inflate_points_estimate(self):
         tree = ast.parse(_source("src/stats/manager.py"))
