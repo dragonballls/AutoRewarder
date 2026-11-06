@@ -651,7 +651,9 @@ class DailySet:
             self.last_totals = dict(totals)
 
             if stop_event is not None and stop_event.is_set():
-                self._log("Rewards tasks stopped before all sections could be verified.")
+                self._log(
+                    "Rewards tasks stopped before all sections could be verified."
+                )
                 return False
 
             if totals["total"] == 0:
