@@ -41,6 +41,9 @@ from .emulator import DriverManager, HumanBehavior, edge_policy
 from .search import HistoryManager, SearchEngine, llm, resolve_search_locale
 from .dailytasks import DailySet
 from .manual_tasks.activity_discovery import capture_dashboard_activities
+from .manual_tasks.classroom_demo import (
+    get_classroom_demo_tasks as build_classroom_demo_task_plan,
+)
 from .stats import (
     StatsManager,
     scrape_points_balance,
@@ -610,6 +613,10 @@ class AutoRewarderAPI:
         state = "ON (simulation only)" if enabled else "OFF"
         self.log(f"Sequential account demo: {state}")
         return True
+
+    def get_classroom_demo_tasks(self):
+        """Return the ordered offline task checklist used by the classroom demo."""
+        return build_classroom_demo_task_plan()
 
     def get_force_tasks(self):
         """Return the force flags for the daily tasks and the visual search."""
