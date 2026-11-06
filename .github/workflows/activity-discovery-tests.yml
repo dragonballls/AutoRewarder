@@ -1,0 +1,35 @@
+name: Activity discovery regression tests
+
+on:
+  push:
+    branches:
+      - feat/manual-rewards-activity-discovery
+    paths:
+      - "src/manual_tasks/**"
+      - "tests/manual_tasks/**"
+      - ".github/workflows/activity-discovery-tests.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/manual_tasks/**"
+      - "tests/manual_tasks/**"
+      - ".github/workflows/activity-discovery-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile discovery module and tests
+        run: python -m compileall -q src/manual_tasks tests/manual_tasks
+      - name: Run activity discovery regression suite
+        run: python -m unittest discover -s tests/manual_tasks -v
