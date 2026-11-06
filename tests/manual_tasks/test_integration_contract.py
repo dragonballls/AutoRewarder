@@ -67,7 +67,6 @@ class ExistingWindowIntegrationTests(unittest.TestCase):
         method = ast.unparse(_api_method("main"))
         self.assertIn("self._activity_discovery_attempted = False", method)
 
-
     def test_next_account_prompt_is_opt_in_and_persisted(self):
         settings = _source("src/accounts/settings.py")
         self.assertIn('"prompt_next_account_after_run": False', settings)
