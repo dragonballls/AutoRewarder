@@ -238,9 +238,7 @@ class GlobalSettingsManager:
 
     def get_prompt_next_account_after_run(self):
         """Return whether to offer the next account after a manual run."""
-        return bool(
-            self.get_settings().get("prompt_next_account_after_run", False)
-        )
+        return bool(self.get_settings().get("prompt_next_account_after_run", False))
 
     def set_prompt_next_account_after_run(self, enabled):
         """Persist the opt-in next-account prompt preference."""
