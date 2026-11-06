@@ -25,6 +25,21 @@ def _api_method(name: str) -> ast.FunctionDef:
     )
 
 
+@unittest.skipUnless(
+    all(
+        (REPO_ROOT / path).is_file()
+        for path in (
+            "src/api.py",
+            "gui/index.html",
+            "gui/script.js",
+            "src/dailytasks/runner.py",
+            "src/dailytasks/new_dashboard.py",
+            "src/search/engine.py",
+            "src/emulator/driver.py",
+        )
+    ),
+    "requires the full AutoRewarder repository checkout",
+)
 class ExistingWindowIntegrationTests(unittest.TestCase):
     def test_test_button_is_in_existing_run_controls(self):
         html = _source("gui/index.html")
