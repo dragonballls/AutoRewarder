@@ -335,6 +335,56 @@ try {
 """
 
 
+def _verified_daily_set_counts(before_items, after_items):
+    """
+    Compare the same Daily Set activities before and after a run.
+
+    A complete post-run snapshot must contain every original activity under a
+    stable offerId/hash/destination identity. Missing or unidentified records
+    are not treated as completed.
+    """
+    if not isinstance(before_items, list) or not before_items:
+        return None
+    if not isinstance(after_items, list) or not after_items:
+        return None
+
+    def identity(item):
+        if not isinstance(item, dict):
+            return None
+        for field in ("offerId", "hash", "destination"):
+            value = item.get(field)
+            if isinstance(value, (str, int)) and str(value).strip():
+                return str(value).strip()
+        return None
+
+    before_by_key = {}
+    for item in before_items:
+        key = identity(item)
+        if key is None or key in before_by_key:
+            return None
+        before_by_key[key] = item
+
+    after_by_key = {}
+    for item in after_items:
+        key = identity(item)
+        if key is not None:
+            after_by_key[key] = item
+
+    if any(key not in after_by_key for key in before_by_key):
+        return None
+
+    final = sum(
+        1 for key in before_by_key
+        if after_by_key[key].get("isCompleted") is True
+    )
+    newly = sum(
+        1 for key, item in before_by_key.items()
+        if item.get("isCompleted") is not True
+        and after_by_key[key].get("isCompleted") is True
+    )
+    return {"total": len(before_by_key), "final": final, "newly": newly}
+
+
 class NewDashboardDailySet:
     """Daily Set handler for the new Next.js Microsoft Rewards dashboard."""
 
@@ -1321,12 +1371,12 @@ class NewDashboardDailySet:
                     if len(after) >= len(todays):
                         break
                     time.sleep(1.5)
-                if after and len(after) >= len(todays):
+                verified_counts = _verified_daily_set_counts(todays, after)
+                if verified_counts is not None:
                     verified = True
-                    still_incomplete = sum(
-                        1 for it in after if not it.get("isCompleted")
-                    )
-                    newly = max(0, len(incomplete) - still_incomplete)
+                    newly = verified_counts["newly"]
+                    self.last_totals["total"] = verified_counts["total"]
+                    self.last_totals["final"] = verified_counts["final"]
                 else:
                     self._log(
                         "[INFO] Post-run snapshot incomplete "
@@ -1338,22 +1388,23 @@ class NewDashboardDailySet:
 
             self.last_totals["attempted"] = attempted
             self.last_totals["newly"] = newly
-            self.last_totals["final"] = already + newly
 
-            if newly > 0:
-                self._log(f"New dashboard daily set: +{newly} completed this run.")
+            if verified and self.last_totals["final"] == self.last_totals["total"]:
+                self._log(
+                    f"New dashboard daily set: all {self.last_totals['total']} "
+                    f"activities verified complete (+{newly} this run)."
+                )
                 return True
 
             if verified:
-                # We could re-read the cards and they are still incomplete: the
-                # visits did not credit (common in headless — Rewards often won't
-                # credit a headless session) or the items are quizzes needing
-                # manual answers. Report honestly and don't mark today done, so a
-                # later (visible) run can retry.
+                # Some activities remain incomplete after re-reading the exact
+                # same cards. Keep the daily status unmarked so they can be retried.
+                remaining = self.last_totals["total"] - self.last_totals["final"]
                 self._log(
-                    "[WARNING] Daily-set activities were opened but none are marked "
-                    "complete on the dashboard. Not marking today done — if this is "
-                    "a headless run, try again with the browser visible."
+                    f"[WARNING] Daily Set remains incomplete: "
+                    f"{self.last_totals['final']}/{self.last_totals['total']} "
+                    f"verified complete ({remaining} remaining). "
+                    "Not marking today done."
                 )
             else:
                 self._log(
