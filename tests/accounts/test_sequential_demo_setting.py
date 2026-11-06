@@ -22,8 +22,8 @@ accounts_package.__path__ = [str(REPO_ROOT / "src" / "accounts")]
 sys.modules.setdefault("src.accounts", accounts_package)
 
 config_module = types.ModuleType("src.config")
-config_module.APP_DIR = ""
-config_module.GLOBAL_SETTINGS_PATH = ""
+setattr(config_module, "APP_DIR", "")
+setattr(config_module, "GLOBAL_SETTINGS_PATH", "")
 sys.modules.setdefault("src.config", config_module)
 
 settings_module = importlib.import_module("src.accounts.settings")
