@@ -286,6 +286,29 @@ class StatsManager:
             if isinstance(stored, dict):
                 merged[section].update(stored)
 
+        # Older versions added /earn and quest opens to the estimated-points
+        # total even though those actions were not verified as credited.
+        # Rebuild both estimates from the trustworthy counters so existing
+        # profiles are corrected when they are next read.
+        def _count(value):
+            try:
+                return max(0, int(value or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        lifetime = merged["lifetime"]
+        lifetime["points_estimate"] = (
+            _count(lifetime.get("pc_searches")) * POINTS_PER_SEARCH
+            + _count(lifetime.get("mobile_searches")) * POINTS_PER_SEARCH
+            + _count(lifetime.get("daily_cards")) * POINTS_PER_CARD
+        )
+        last_session = merged["last_session"]
+        last_session["points_estimate"] = (
+            _count(last_session.get("pc_searches")) * POINTS_PER_SEARCH
+            + _count(last_session.get("mobile_searches")) * POINTS_PER_SEARCH
+            + _count(last_session.get("daily_cards")) * POINTS_PER_CARD
+        )
+
         # Prefer the new per-day aggregates; otherwise migrate from any legacy
         # per-run `runs` list left in an older stats.json.
         daily = data.get("daily")
