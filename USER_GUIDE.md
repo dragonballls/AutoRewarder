@@ -133,6 +133,8 @@ Adding another account is slightly different, so please follow these steps:
 - It may take short "coffee breaks" during longer sessions
 - If Schedule is enabled and Advanced scheduling is on, the run is paced across the schedule duration using the queries-per-hour target. You will see a clear "Done!" message in the logs when the advanced scheduling run fully completes.
 - After the PC phase, it collects Daily Set + "More Activities" click-through tasks (once per day, per account). Locked cards, sweepstakes and promo banners are automatically skipped — only point-earning tasks are clicked
+- After the existing daily-task and Visual Search steps, it makes one read-only pass over the Rewards dashboard and /earn page to identify Read to Earn, Explore on Bing, and other visible activity types. Results appear in the Activity log for you to review and complete yourself.
+- The activity-discovery pass does not open activity cards, run searches, read articles, answer quizzes or polls, or claim points.
 - If the Visual Search task isn't completed, it will be completed as part of the daily task flow or after PC phase.
 - The process continues until all searches are complete, or until you click **Stop**
 - You'll see updates in the log window
@@ -144,6 +146,12 @@ If a new version is available, AutoRewarder can show an update notification and 
 If you've already done your searches manually (or just want to clean up the dashboard quickly), enable the **"Daily tasks only"** toggle before starting. The run skips both Bing search phases and goes straight to the Rewards dashboard to harvest the Daily Set/More Activities cards + Visual Search task.
 
 Anything already marked as done for today is skipped, and the log says so — see [Force daily tasks & visual search](#force-daily-tasks--visual-search) to run it again anyway.
+
+### Testing activity discovery
+
+Use the **Test activities** button beside **Start run** to check whether the current account's Rewards dashboard exposes recognizable activity cards. It uses the selected account's Edge profile in headless mode, so it does not open another visible browser or application window. Results are written to the existing Activity log.
+
+The test does not complete activities. A zero-result scan means no matching cards were recognized at that moment; check that the account is signed in and remember that Microsoft's dashboard layout and available activities can change.
 
 ### Visual Search
 
