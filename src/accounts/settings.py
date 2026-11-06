@@ -125,6 +125,10 @@ class GlobalSettingsManager:
             "close_to_tray": True,
             # Classroom-only walkthrough that simulates account-by-account progress.
             "demo_sequence_all_accounts": False,
+            # When True, a Start run walks through every configured profile:
+            # finish the current profile's run, switch to the next one, start
+            # again — until all profiles completed. Real runs (browser + points).
+            "run_all_profiles_in_sequence": False,
             # "Run it anyway" overrides. status.json remembers what already
             # ran today so a second run of the day skips it; these let the
             # user re-run a task whose saved status they don't trust (e.g. a
@@ -243,6 +247,16 @@ class GlobalSettingsManager:
         """Persist the local sequential-account demo toggle."""
         settings = self.settings_for_update()
         settings["demo_sequence_all_accounts"] = bool(enabled)
+        self.save_settings(settings)
+
+    def get_run_all_profiles_in_sequence(self):
+        """Return whether real Start runs should cycle through every profile."""
+        return bool(self.get_settings().get("run_all_profiles_in_sequence", False))
+
+    def set_run_all_profiles_in_sequence(self, enabled):
+        """Persist the run-all-profiles-in-sequence toggle."""
+        settings = self.settings_for_update()
+        settings["run_all_profiles_in_sequence"] = bool(enabled)
         self.save_settings(settings)
 
     def get_current_account_id(self):

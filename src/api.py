@@ -611,6 +611,17 @@ class AutoRewarderAPI:
         self.log(f"Sequential account demo: {state}")
         return True
 
+    def get_run_all_profiles_in_sequence(self):
+        """Return whether real Start runs cycle through every profile/account."""
+        return self.global_settings.get_run_all_profiles_in_sequence()
+
+    def set_run_all_profiles_in_sequence(self, enabled):
+        """Persist the run-all-profiles-in-sequence toggle."""
+        self.global_settings.set_run_all_profiles_in_sequence(enabled)
+        state = "ON (all profiles)" if enabled else "OFF (current profile only)"
+        self.log(f"Run all profiles in sequence: {state}")
+        return True
+
     def get_force_tasks(self):
         """Return the force flags for the daily tasks and the visual search."""
         return self.global_settings.get_force_tasks()
@@ -2520,12 +2531,26 @@ class AutoRewarderAPI:
             daily_only (bool): whether to skip searches and just run the Daily Set
             run_context (str): The context in which the bot is running. Can be "manual" or "scheduled"
         """
-        if run_context not in ("manual", "scheduled"):
+        # "Run all profiles in sequence" is a manual GUI feature only. While
+        # main_all_profiles() drives the cycle, each per-profile call runs in
+        # "sequence-item" mode: paced like a scheduled run (default search
+        # delay) but never re-entering the cycle itself.
+        if run_context not in ("manual", "scheduled", "sequence-item"):
             self.log(
                 f"[WARNING] Unknown run context '{run_context}'. "
                 "Using scheduled mode."
             )
             run_context = "scheduled"
+
+        if (
+            run_context == "manual"
+            and self.global_settings.get_run_all_profiles_in_sequence()
+        ):
+            return self.main_all_profiles(
+                pc_count=pc_count,
+                mobile_count=mobile_count,
+                daily_only=daily_only,
+            )
 
         if self.account_manager.current_id() is None:
             self.log("[ERROR] No account selected. Add one via the dropdown.")
