@@ -70,13 +70,23 @@ class OllamaSupport:
                 "Use a local Ollama address such as http://127.0.0.1:11434."
             ) from None
 
+    @staticmethod
+    def _local_session():
+        """Create a requests session that ignores system proxy environment variables."""
+        session = requests.Session()
+        session.trust_env = False
+        return session
+
     def list_models(self, base_url: str = DEFAULT_OLLAMA_URL) -> dict:
         """Return locally installed Ollama models without raising exceptions."""
         try:
             base = self._normalize_base_url(base_url)
-            response = requests.get(f"{base}/api/tags", timeout=_CONNECT_TIMEOUT)
-            response.raise_for_status()
-            body = response.json()
+            with self._local_session() as session:
+                response = session.get(
+                    f"{base}/api/tags", timeout=_CONNECT_TIMEOUT
+                )
+                response.raise_for_status()
+                body = response.json()
             models = []
             for item in body.get("models", []):
                 if isinstance(item, dict):
@@ -105,7 +115,7 @@ class OllamaSupport:
                 "models": [],
                 "error": "Could not reach Ollama at the local address. Open Ollama and try again.",
             }
-        except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+        except (requests.RequestException, TypeError, AttributeError) as exc:
             return {
                 "ok": False,
                 "models": [],
@@ -160,18 +170,19 @@ class OllamaSupport:
                 )
             messages.append({"role": "user", "content": user_content})
 
-            response = requests.post(
-                f"{base}/api/chat",
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "stream": False,
-                    "options": {"temperature": 0.2, "num_predict": 700},
-                },
-                timeout=(5, _CHAT_TIMEOUT),
-            )
-            response.raise_for_status()
-            body = response.json()
+            with self._local_session() as session:
+                response = session.post(
+                    f"{base}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "stream": False,
+                        "options": {"temperature": 0.2, "num_predict": 700},
+                    },
+                    timeout=(5, _CHAT_TIMEOUT),
+                )
+                response.raise_for_status()
+                body = response.json()
             answer = body.get("message", {}).get("content", "")
             if not isinstance(answer, str) or not answer.strip():
                 return {"ok": False, "error": "Ollama returned an empty response."}
@@ -200,7 +211,7 @@ class OllamaSupport:
                 "ok": False,
                 "error": f"Ollama returned HTTP {status}. {detail}".strip(),
             }
-        except (requests.RequestException, ValueError, TypeError, KeyError, AttributeError) as exc:
+        except (requests.RequestException, TypeError, KeyError, AttributeError) as exc:
             return {
                 "ok": False,
                 "error": f"Could not get a response from Ollama: {str(exc)[:220]}",
