@@ -15,11 +15,11 @@ def _redact_diagnostic_text(value: str) -> str:
     text = str(value)
     # Redact bearer credentials before the generic header/key matcher.
     text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", text)
-    text = re.sub(
-        r"""(?i)(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret|cookie|session(?:id)?|account[_ -]?id|authorization)\s*["']?\s*[:=]\s*["']?([^\s"']+)""",
-        r"\1=[REDACTED]",
-        text,
+    credential_pattern = (
+        r"""(?i)(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret|cookie|session(?:id)?|account[_ -]?id|authorization)"""
+        r"""\s*["']?\s*[:=]\s*["']?([^\s"',;}]+)["']?"""
     )
+    text = re.sub(credential_pattern, r"\1=[REDACTED]", text)
     text = re.sub(
         r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
         "[EMAIL REDACTED]",
