@@ -2097,10 +2097,10 @@ class AutoRewarderAPI:
             background_text = background.get("content", "") if background.get("ok") else ""
             parts = []
             if recent:
-                parts.append("Recent live application log lines:\\n" + "\\n".join(recent))
+                parts.append("Recent live application log lines:\n" + "\n".join(recent))
             if background_text:
-                parts.append("Recent background-run log lines:\\n" + background_text[-12000:])
-            logs = "\\n\\n".join(parts)[-12000:]
+                parts.append("Recent background-run log lines:\n" + background_text[-12000:])
+            logs = "\n\n".join(parts)[-12000:]
         return self._ollama_support.chat(
             question=question,
             model=model,
