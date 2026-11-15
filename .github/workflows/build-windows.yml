@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
@@ -42,7 +42,11 @@ jobs:
           if (!(Test-Path "dist/AutoRewarder/AutoRewarder.exe")) {
             throw "The Windows build did not produce AutoRewarder.exe."
           }
-          if (!(Test-Path "dist/AutoRewarder/gui/ai_helper.html")) {
+          $helperCandidates = @(
+            "dist/AutoRewarder/gui/ai_helper.html",
+            "dist/AutoRewarder/_internal/gui/ai_helper.html"
+          )
+          if (!($helperCandidates | Where-Object { Test-Path $_ })) {
             throw "The Windows build is missing the Ollama helper UI."
           }
           Compress-Archive -Path "dist/AutoRewarder" -DestinationPath "dist/AutoRewarder-Ollama-Windows.zip" -CompressionLevel Optimal -Force
@@ -54,3 +58,24 @@ jobs:
           path: dist/AutoRewarder-Ollama-Windows.zip
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish rolling preview release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: autorewarder-ollama-preview
+          target_commitish: feat/local-ollama-support-assistant
+          name: AutoRewarder Ollama Preview
+          body: |
+            Automated Windows preview build of the AutoRewarder fork with the optional local Ollama support helper.
+
+            Source branch: feat/local-ollama-support-assistant
+            Build commit: ${{ github.sha }}
+
+            This is a preview build. Keep your previous installation and data backup until the new build is verified.
+          prerelease: true
+          make_latest: false
+          files: dist/AutoRewarder-Ollama-Windows.zip
+          overwrite_files: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
