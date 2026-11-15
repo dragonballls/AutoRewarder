@@ -342,6 +342,17 @@ To view background logs, click **Background logs** in the Activity section of th
 > [!NOTE]
 > You can find the file paths for your raw history, background logs, and settings in the [Runtime Data](#runtime-data) section.
 
+## Local AI Helper (Ollama)
+
+Click **AI Helper** in the Activity section of the main window to open the optional local support assistant.
+
+1. Make sure the Ollama desktop app or local server is running.
+2. Keep the default local address `http://127.0.0.1:11434`, then choose **Refresh models**.
+3. Select an installed model and ask about an AutoRewarder setting, an error message, or a troubleshooting question.
+4. Leave **Include recent app logs for diagnosis** unchecked unless you want the model to inspect the recent log excerpt.
+
+The helper sends requests only to a loopback address on your own computer and requires no API key. It does not change settings, operate the browser, access accounts, or run tasks. The conversation is kept in the helper window and is not saved by AutoRewarder.
+
 
 ---
 
