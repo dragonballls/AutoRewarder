@@ -13,12 +13,13 @@ _MAX_LOG_CHARS = 12_000
 def _redact_diagnostic_text(value: str) -> str:
     """Remove common credentials and personal identifiers before local AI analysis."""
     text = str(value)
+    # Redact bearer credentials before the generic header/key matcher.
+    text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", text)
     text = re.sub(
-        r"(?i)(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret|cookie|session(?:id)?|authorization)\s*[:=]\s*([^\s,;]+)",
+        r"""(?i)(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret|cookie|session(?:id)?|account[_ -]?id|authorization)\s*["']?\s*[:=]\s*["']?([^\s"']+)""",
         r"\1=[REDACTED]",
         text,
     )
-    text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", text)
     text = re.sub(
         r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
         "[EMAIL REDACTED]",
