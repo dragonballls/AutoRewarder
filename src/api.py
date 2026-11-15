@@ -32,7 +32,7 @@ from .config import (
     stats_path,
 )
 from .utils import check_for_updates
-from .assistant.ollama_support import DEFAULT_OLLAMA_URL, OllamaSupport
+from .assistant.api_mixin import OllamaSupportMixin
 from .accounts import (
     AccountManager,
     AccountMetaManager,
@@ -77,7 +77,7 @@ def _normalize_run_time(value):
     return AUTOSTART_TIME
 
 
-class AutoRewarderAPI:
+class AutoRewarderAPI(OllamaSupportMixin):
     """
     Core API class for AutoRewarder.
 
@@ -96,9 +96,6 @@ class AutoRewarderAPI:
         self._stats_window = None
         self._history_window = None
         self._background_logs_window = None
-        self._ai_helper_window = None
-        self._recent_log_messages = []
-        self._ollama_support = OllamaSupport()
         self._driver = None
         self.is_driver_loading = False
         self._run_lock = threading.Lock()
@@ -283,26 +280,6 @@ class AutoRewarderAPI:
             js_api=self,
             width=700,
             height=500,
-            resizable=True,
-            background_color="#0d1117",
-            text_select=True,
-        )
-
-    def open_ai_helper_window(self):
-        """Open (or refocus + reload) the local Ollama support assistant."""
-        import webview
-
-        url = os.path.join(GUI_DIR, "ai_helper.html")
-        if self._reuse_window(self._ai_helper_window, url):
-            return
-
-        self._ai_helper_window = webview.create_window(
-            title="AutoRewarder AI Helper",
-            url=url,
-            js_api=self,
-            width=820,
-            height=680,
-            min_size=(560, 480),
             resizable=True,
             background_color="#0d1117",
             text_select=True,
@@ -2081,34 +2058,6 @@ class AutoRewarderAPI:
                 "error": f"[ERROR] Error reading background logs: {e}",
             }
 
-    def list_ollama_models(self, base_url=DEFAULT_OLLAMA_URL):
-        """List locally installed Ollama models for the read-only helper."""
-        return self._ollama_support.list_models(base_url)
-
-    def ask_ollama_support(
-        self, question, model, base_url=DEFAULT_OLLAMA_URL,
-        include_logs=False, history=None
-    ):
-        """Ask Ollama for read-only support; never changes app state or runs tasks."""
-        logs = ""
-        if include_logs:
-            recent = self._recent_log_messages[-80:]
-            background = self.get_background_logs()
-            background_text = background.get("content", "") if background.get("ok") else ""
-            parts = []
-            if recent:
-                parts.append("Recent live application log lines:\n" + "\n".join(recent))
-            if background_text:
-                parts.append("Recent background-run log lines:\n" + background_text[-12000:])
-            logs = "\n\n".join(parts)[-12000:]
-        return self._ollama_support.chat(
-            question=question,
-            model=model,
-            base_url=base_url,
-            logs=logs,
-            history=history,
-        )
-
     # ------------------------------------------------------------------
     # Statistics (scoped to current account)
     # ------------------------------------------------------------------
@@ -2379,13 +2328,6 @@ class AutoRewarderAPI:
         Args:
             message (str): The message to log.
         """
-        try:
-            self._recent_log_messages.append(str(message)[:1000])
-            if len(self._recent_log_messages) > 150:
-                del self._recent_log_messages[:-150]
-        except Exception:
-            pass
-
         if self._webview_window:
             try:
                 safe_message = json.dumps(message)
