@@ -103,50 +103,36 @@ function Merge-MissingData([string]$Source, [string]$Destination) {
 }
 
 function Get-LatestBuildArchive([string]$Destination) {
-    $gh = Get-Command "gh.exe" -ErrorAction SilentlyContinue
-    if (!$gh) { $gh = Get-Command "gh" -ErrorAction SilentlyContinue }
-    if (!$gh) {
-        Start-Process "https://github.com/$Repo/actions/workflows/$Workflow"
-        throw "GitHub CLI (gh) is not installed. The Actions page has been opened. Download the successful '$ArtifactName' artifact, then rerun this script with -ArchivePath pointing to the ZIP."
+    $releaseUrl = "https://api.github.com/repos/$Repo/releases/tags/autorewarder-ollama-preview"
+    try {
+        $release = Invoke-RestMethod -Uri $releaseUrl -Headers @{
+            "Accept" = "application/vnd.github+json"
+            "User-Agent" = "AutoRewarder-Ollama-Installer"
+        }
+    } catch {
+        Start-Process "https://github.com/$Repo/actions/workflows/build-windows.yml"
+        throw "The Windows preview release is not available yet. Check that the latest build workflow completed successfully, then rerun this script."
     }
 
-    & $gh.Source auth status --hostname github.com *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Start-Process "https://github.com/$Repo/actions/workflows/$Workflow"
-        throw "GitHub CLI is not authenticated. Sign in with 'gh auth login', download the successful artifact from the opened Actions page, then rerun with -ArchivePath."
-    }
-
-    $branchInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/branches/$Branch" -Headers @{
-        "Accept" = "application/vnd.github+json"
-        "User-Agent" = "AutoRewarder-Ollama-Installer"
-    }
-    $tipSha = [string]$branchInfo.commit.sha
-    $runsJson = & $gh.Source run list --repo $Repo --workflow $Workflow --branch $Branch --limit 20 --json databaseId,headSha,status,conclusion,createdAt
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not list GitHub Actions runs. Check 'gh auth status' and try again."
-    }
-    $runs = @($runsJson | ConvertFrom-Json)
-    $run = $runs |
-        Where-Object { $_.status -eq "completed" -and $_.conclusion -eq "success" -and $_.headSha -eq $tipSha } |
+    $asset = $release.assets |
+        Where-Object { $_.name -eq "AutoRewarder-Ollama-Windows.zip" } |
         Select-Object -First 1
-    if (!$run) {
-        Start-Process "https://github.com/$Repo/actions/workflows/$Workflow"
-        throw "There is no successful build for the current branch commit ($tipSha) yet. Wait for that build to finish successfully, then rerun this script."
+    if (!$asset -or !$asset.browser_download_url) {
+        Start-Process "https://github.com/$Repo/actions/workflows/build-windows.yml"
+        throw "The preview release does not contain the Windows ZIP yet. Check the build workflow and rerun after it succeeds."
     }
 
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-    & $gh.Source run download ([string]$run.databaseId) --repo $Repo --name $ArtifactName --dir $Destination
-    if ($LASTEXITCODE -ne 0) {
-        throw "The GitHub artifact download failed. You can download it manually from the Actions page and pass it with -ArchivePath."
+    $zipPath = Join-Path $Destination "AutoRewarder-Ollama-Windows.zip"
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -UseBasicParsing
+    if (!(Test-Path -LiteralPath $zipPath -PathType Leaf)) {
+        throw "The Windows ZIP download did not create a file."
     }
-    $zip = Get-ChildItem -LiteralPath $Destination -Filter "*.zip" -File -Recurse |
-        Select-Object -First 1
-    if (!$zip) {
-        throw "The build completed, but the expected ZIP artifact was not found."
+    if ((Get-Item -LiteralPath $zipPath).Length -ne [int64]$asset.size) {
+        throw "The downloaded ZIP size does not match GitHub's published asset size. Delete it and retry."
     }
-    return $zip.FullName
+    return $zipPath
 }
-
 function New-AppShortcut([string]$ExePath) {
     try {
         $desktop = [Environment]::GetFolderPath("Desktop")
