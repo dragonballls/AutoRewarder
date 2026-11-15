@@ -4,7 +4,7 @@ The AI helper is kept in `src/assistant/` and `gui/ai_helper.html`. The main app
 
 ## Upstream update handling
 
-The GitHub Actions workflow `.github/workflows/sync-upstream.yml` runs weekly and can also be started manually from the Actions tab. It fetches `safarsin/AutoRewarder:main` and merges those commits into `feat/local-ollama-support-assistant`.
+The GitHub Actions workflow `.github/workflows/sync-upstream.yml` runs daily and can also be started manually from the Actions tab. It fetches `safarsin/AutoRewarder:main` and merges those commits into `feat/local-ollama-support-assistant`.
 
 A clean merge is syntax-checked and runs the Ollama unit tests before being pushed. If an upstream change conflicts with a local integration point, the workflow aborts the merge and fails rather than overwriting the AI helper. Resolve that conflict manually by preserving the upstream change and reapplying the small mixin/UI hook, then rerun the workflow.
 
