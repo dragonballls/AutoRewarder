@@ -1,0 +1,58 @@
+name: Sync original AutoRewarder updates
+
+on:
+  schedule:
+    - cron: "23 10 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: autorewarder-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the maintained AI-enabled branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/local-ollama-support-assistant
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure sync identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch and merge original AutoRewarder
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/safarsin/AutoRewarder.git
+          git fetch upstream main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "The maintained branch already contains the latest upstream commit."
+            exit 0
+          fi
+
+          if ! git merge --no-edit --no-ff upstream/main; then
+            git merge --abort
+            echo "::error::Upstream changes conflict with the maintained branch. No files were overwritten. Resolve the merge manually, then rerun this workflow."
+            exit 1
+          fi
+
+      - name: Check Python syntax
+        run: python -m compileall -q src
+
+      - name: Run local Ollama helper tests
+        run: |
+          python -m pip install --disable-pip-version-check requests
+          python -m unittest discover -s tests -v
+
+      - name: Push upstream-compatible branch
+        run: git push origin HEAD:feat/local-ollama-support-assistant
