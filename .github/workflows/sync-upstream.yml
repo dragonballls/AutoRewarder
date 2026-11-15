@@ -2,7 +2,7 @@ name: Sync original AutoRewarder updates
 
 on:
   schedule:
-    - cron: "23 10 * * 1"
+    - cron: "23 10 * * *"
   workflow_dispatch:
 
 permissions:
@@ -52,7 +52,7 @@ jobs:
       - name: Run local Ollama helper tests
         run: |
           python -m pip install --disable-pip-version-check requests
-          python -m unittest discover -s tests -v
+          python -m unittest discover -s tests -t . -v
 
       - name: Push upstream-compatible branch
         run: git push origin HEAD:feat/local-ollama-support-assistant
