@@ -105,7 +105,7 @@ class OllamaSupport:
                 "models": [],
                 "error": "Could not reach Ollama at the local address. Open Ollama and try again.",
             }
-        except (requests.RequestException, ValueError, TypeError) as exc:
+        except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
             return {
                 "ok": False,
                 "models": [],
@@ -200,7 +200,7 @@ class OllamaSupport:
                 "ok": False,
                 "error": f"Ollama returned HTTP {status}. {detail}".strip(),
             }
-        except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
+        except (requests.RequestException, ValueError, TypeError, KeyError, AttributeError) as exc:
             return {
                 "ok": False,
                 "error": f"Could not get a response from Ollama: {str(exc)[:220]}",
