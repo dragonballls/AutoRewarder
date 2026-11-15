@@ -40,6 +40,9 @@ function Get-DataSummary([string]$Path) {
     $accountsDir = Join-Path $Path "accounts"
     if (Test-Path -LiteralPath $accountsDir -PathType Container) {
         $profileCount = @(Get-ChildItem -LiteralPath $accountsDir -Directory -Force -ErrorAction SilentlyContinue).Count
+    } elseif (Test-Path -LiteralPath (Join-Path $Path "EdgeProfile") -PathType Container) {
+        # Older single-profile versions stored this at the data-root level.
+        $profileCount = 1
     }
     return [pscustomobject]@{
         FileCount = $files.Count
@@ -235,14 +238,30 @@ $tempExtract = Join-Path $env:TEMP ("AutoRewarder-Ollama-Extract-" + [guid]::New
 New-Item -ItemType Directory -Path $tempExtract -Force | Out-Null
 Expand-Archive -LiteralPath $ArchivePath -DestinationPath $tempExtract -Force
 
+# A manually downloaded GitHub Actions artifact is an outer ZIP containing
+# the actual application ZIP. Accept either form.
 $exe = Get-ChildItem -LiteralPath $tempExtract -Filter "AutoRewarder.exe" -File -Recurse |
     Select-Object -First 1
+if (!$exe) {
+    $innerZip = Get-ChildItem -LiteralPath $tempExtract -Filter "*.zip" -File -Recurse |
+        Select-Object -First 1
+    if ($innerZip) {
+        $nestedExtract = Join-Path $env:TEMP ("AutoRewarder-Ollama-Nested-" + [guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Path $nestedExtract -Force | Out-Null
+        Expand-Archive -LiteralPath $innerZip.FullName -DestinationPath $nestedExtract -Force
+        $exe = Get-ChildItem -LiteralPath $nestedExtract -Filter "AutoRewarder.exe" -File -Recurse |
+            Select-Object -First 1
+    }
+}
 if (!$exe) {
     throw "The archive does not contain AutoRewarder.exe. Your existing app data and backup are untouched."
 }
 $appSource = $exe.Directory.FullName
-$helperUi = Join-Path $appSource "gui\ai_helper.html"
-if (!(Test-Path -LiteralPath $helperUi -PathType Leaf)) {
+$helperUiCandidates = @(
+    (Join-Path $appSource "gui\ai_helper.html"),
+    (Join-Path $appSource "_internal\gui\ai_helper.html")
+)
+if (!($helperUiCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })) {
     throw "This build does not contain the Ollama helper UI. Your existing app data and backup are untouched."
 }
 
