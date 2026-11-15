@@ -153,7 +153,11 @@
         sendQuestion();
       }
     });
-    window.addEventListener('pywebviewready', refreshModels);
+    if (window.pywebview && pywebview.api) {
+      refreshModels();
+    } else {
+      window.addEventListener('pywebviewready', refreshModels, { once: true });
+    }
   </script>
 </body>
 </html>
