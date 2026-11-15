@@ -114,6 +114,16 @@ function Get-LatestBuildArchive([string]$Destination) {
         throw "The Windows preview release is not available yet. Check that the latest build workflow completed successfully, then rerun this script."
     }
 
+    $branchInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/branches/$Branch" -Headers @{
+        "Accept" = "application/vnd.github+json"
+        "User-Agent" = "AutoRewarder-Ollama-Installer"
+    }
+    $tipSha = [string]$branchInfo.commit.sha
+    if ([string]$release.body -notmatch [regex]::Escape($tipSha)) {
+        Start-Process "https://github.com/$Repo/actions/workflows/build-windows.yml"
+        throw "The latest preview release does not match the current source commit yet. Wait for the current build to succeed, then rerun this script."
+    }
+
     $asset = $release.assets |
         Where-Object { $_.name -eq "AutoRewarder-Ollama-Windows.zip" } |
         Select-Object -First 1
