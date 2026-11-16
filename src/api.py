@@ -2431,7 +2431,8 @@ class AutoRewarderAPI:
 
         if pc <= 0 and mobile > 0 and not self._stop_event.is_set():
             self.log(
-                "No PC searches requested; running desktop tasks before Mobile searches."
+                "No PC searches requested; running desktop tasks "
+                "before Mobile searches."
             )
             self._run_phase(
                 mobile=False,
@@ -2657,7 +2658,8 @@ class AutoRewarderAPI:
                         )
                     elif mobile_count > 0 and not self._stop_event.is_set():
                         self.log(
-                            "No PC searches requested; running desktop tasks before Mobile searches."
+                            "No PC searches requested; running desktop tasks "
+                            "before Mobile searches."
                         )
                         self._run_phase(
                             mobile=False,
@@ -3265,7 +3267,9 @@ class AutoRewarderAPI:
             # A zero-count desktop phase is intentional for Mobile-only runs:
             # it completes the dashboard work above without generating queries.
             if count <= 0:
-                self.log(f"{label}: no searches requested; dashboard task pass finished.")
+                self.log(
+                    f"{label}: no searches requested; dashboard task pass finished."
+                )
                 return
 
             if self._stop_event.is_set():
@@ -3275,7 +3279,9 @@ class AutoRewarderAPI:
             # Build LLM/static queries only after the pre-search tasks finish.
             queries_to_search = self._build_queries(count)
             if not queries_to_search:
-                self.log(f"[WARNING] {label}: no queries available. Search phase skipped.")
+                self.log(
+                    f"[WARNING] {label}: no queries available. Search phase skipped."
+                )
                 if self.history is not None:
                     self.history.add_to_history(
                         "N/A", f"[ERROR] {label}: no queries available"
