@@ -43,7 +43,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='AutoRewarder',
+    name='AutoRewarder-Ollama',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
