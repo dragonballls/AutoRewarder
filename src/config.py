@@ -15,19 +15,29 @@ REPO = "safarsin/AutoRewarder"
 
 PLATFORM_NAME = platform.system()
 
+# The Ollama build is a side-by-side copy with its own settings and browser
+# profile directory. Source runs and the original executable keep AutoRewarder.
+_EXECUTABLE_STEM = os.path.splitext(os.path.basename(sys.executable))[0].lower()
+_IS_OLLAMA_BUILD = (
+    getattr(sys, "frozen", False) and _EXECUTABLE_STEM == "autorewarder-ollama"
+)
+APP_NAME = "AutoRewarder-Ollama" if _IS_OLLAMA_BUILD else "AutoRewarder"
+
 # Configs
 # Create a separate folder for the bot's profile to avoid conflicts with your main browser
 APP_DIR = ""
 
 # Get Linux app directory
 if PLATFORM_NAME == "Linux":
-    APP_DIR = os.path.expanduser("~/.local/share/AutoRewarder")
+    APP_DIR = os.path.expanduser(f"~/.local/share/{APP_NAME}")
 
 # Get Windows app directory
 elif PLATFORM_NAME == "Windows":
-    APP_DIR = os.path.join(
-        os.environ["USERPROFILE"], "AppData", "Local", "AutoRewarder"
+    local_app_data = os.environ.get(
+        "LOCALAPPDATA",
+        os.path.join(os.environ["USERPROFILE"], "AppData", "Local"),
     )
+    APP_DIR = os.path.join(local_app_data, APP_NAME)
 
 # Quit on invalid platform
 else:
