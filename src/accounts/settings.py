@@ -139,7 +139,7 @@ class GlobalSettingsManager:
             # static assets/queries.json. The key is stored in plain text here,
             # consistent with the rest of settings.json.
             "use_llm_queries": False,
-            "llm_provider": "openai",  # openai | openai-compatible | anthropic | gemini
+            "llm_provider": "openai",  # openai | openai-compatible | anthropic | gemini | ollama
             "llm_model": "",  # blank = provider default
             "llm_api_key": "",
             "llm_base_url": "",
