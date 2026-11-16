@@ -344,7 +344,7 @@
             <label class="settings-row">
               <div class="settings-row-text">
                 <div class="settings-row-label">Generate search terms with AI (LLM)</div>
-                <div class="settings-row-hint">Use your own LLM API key to generate fresh queries in your language on each run. Falls back to the built-in list if generation fails.</div>
+                <div class="settings-row-hint">Choose a cloud LLM or local Ollama to generate fresh queries in your language. Cloud providers use your API key; Ollama runs on this PC. Falls back to the built-in list if generation fails.</div>
               </div>
               <span class="toggle-compact">
                 <input type="checkbox" id="llmToggle">
@@ -361,6 +361,7 @@
                     <option value="openai-compatible">OpenAI-compatible</option>
                     <option value="anthropic">Anthropic</option>
                     <option value="gemini">Google Gemini</option>
+                    <option value="ollama">Ollama (local)</option>
                   </select>
                 </div>
                 <div class="form-field">
@@ -385,7 +386,7 @@
               <p class="form-hint" id="llm_model_hint">Load the list to pick a model, or keep the provider default.</p>
               <div class="form-field" id="llm_base_url_field" hidden>
                 <label for="llmBaseUrl">Base URL</label>
-                <input type="url" id="llmBaseUrl" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false">
+                <input type="url" id="llmBaseUrl" placeholder="http://127.0.0.1:11434" autocomplete="off" spellcheck="false">
               </div>
               <div class="form-grid-2">
                 <div class="form-field">
@@ -404,9 +405,9 @@
                   <input type="text" id="llmLocale" placeholder="auto" autocomplete="off" spellcheck="false">
                 </div>
               </div>
-              <p class="form-hint">Get an API key from <a href="#" id="llmKeyLink">your provider</a>.</p>
+              <p class="form-hint" id="llm_key_hint">Get an API key from <a href="#" id="llmKeyLink">your provider</a>.</p>
               <p class="form-hint" id="llm_locale_hint">Leave "auto" to follow your system language, or enter a locale like fr-FR.</p>
-              <p class="form-hint">Your API key is stored locally in settings.json (plain text). Requests only send a prompt asking for queries — no personal data.</p>
+              <p class="form-hint">Cloud API keys are stored locally in settings.json (plain text). Ollama requests stay on this PC when using the default local address.</p>
             </div>
           </div>
 
