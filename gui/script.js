@@ -464,7 +464,62 @@ async function test_reward_activities() {
   }
 }
 
+function render_activity_discovery() {
+  const host = document.getElementById('activity_discovery_results');
+  const filter = document.getElementById('activity_mode_filter');
+  if (!host || !filter) return;
+  const mode = filter.value;
+  const all = Array.isArray(window._last_discovered_activities) ? window._last_discovered_activities : [];
+  const dailyKinds = new Set(['daily_set', 'punchcard', 'quiz', 'poll', 'more_activities']);
+  const otherKinds = new Set(['explore', 'other']);
+  const visible = all.filter(item => {
+    if (mode === 'read') return item.kind === 'read_to_earn';
+    if (mode === 'daily') return dailyKinds.has(item.kind);
+    if (mode === 'other') return otherKinds.has(item.kind);
+    return mode === 'all';
+  });
+  host.replaceChildren();
+  if (mode === 'search') {
+    const note = document.createElement('p');
+    note.className = 'activity-filter-note';
+    note.textContent = 'Searches are not dashboard activity cards, so the read-only activity scanner does not list them. Search counts remain in the run controls.';
+    host.appendChild(note);
+    return;
+  }
+  if (!all.length) {
+    const note = document.createElement('p');
+    note.className = 'activity-filter-note';
+    note.textContent = 'No scan results yet. Select Test activities to read the current dashboard.';
+    host.appendChild(note);
+    return;
+  }
+  if (!visible.length) {
+    const note = document.createElement('p');
+    note.className = 'activity-filter-note';
+    note.textContent = 'No activities in this category were detected in the latest scan.';
+    host.appendChild(note);
+    return;
+  }
+  const list = document.createElement('ul');
+  list.className = 'activity-discovery-list';
+  visible.forEach(item => {
+    const row = document.createElement('li');
+    const title = document.createElement('strong');
+    title.textContent = item.title || 'Untitled activity';
+    const meta = document.createElement('span');
+    const kind = String(item.kind || 'other').replace(/_/g, ' ');
+    const status = String(item.status || 'unknown').replace(/_/g, ' ');
+    const points = Number.isFinite(item.points) ? ' · ' + item.points + ' points shown' : '';
+    meta.textContent = kind + ' · ' + status + points;
+    row.append(title, meta);
+    list.appendChild(row);
+  });
+  host.appendChild(list);
+}
 function _sync_daily_only_ui() {
+  const activityFilter = document.getElementById('activity_mode_filter');
+  if (activityFilter) activityFilter.addEventListener('change', render_activity_discovery);
+  render_activity_discovery();
   const toggle = document.getElementById('dailyOnlyToggle');
   const pcField = document.getElementById('count_pc');
   const mobileField = document.getElementById('count_mobile');
