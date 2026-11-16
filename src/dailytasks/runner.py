@@ -362,25 +362,43 @@ class DailySet:
         )
 
         attempted = 0
-        for idx in incomplete_indices:
+        # Cards are matched by their title, not by their position. The Rewards
+        # SPA re-renders as each card completes and may drop finished cards from
+        # the DOM entirely, so a positional index taken before the loop goes
+        # stale the moment the first card is clicked: the next index then points
+        # at the wrong card (or past the end), and one card is silently left
+        # undone — the reported "Daily Set only completing 2/3" (issue #131).
+        #
+        # The work list is therefore built once, up front, as titles. It must be
+        # captured here: re-reading the section inside the loop would shrink
+        # with the page and re-introduce the same shifting.
+        work_titles = [self.cards.get_title(cards[idx]) for idx in incomplete_indices]
+
+        handled_cards = set()
+        for position, target_title in enumerate(work_titles):
             if stop_event is not None and stop_event.is_set():
                 self._log(f"Stop requested — halting {section_name} loop.")
                 break
 
-            # Re-apply the same visibility filter used to build
-            # incomplete_indices. Without it, tomorrow's hidden cards
-            # (kept in the DOM under ng-hide) re-enter the list and
-            # shift the indices — we'd then click the wrong card or
-            # hit a 0x0 element.
+            label = target_title or f"#{position + 1}"
+
+            # Re-read the section, then find this card again by its title. A
+            # title is stable across re-renders; the position is not.
             current_all = driver.find_elements(By.CSS_SELECTOR, selector)
             current = [c for c in current_all if self.cards.is_visible(c)]
-            if idx >= len(current):
+            if not current:
+                self._log(f"{section_name}: no cards left in the section — stopping.")
+                break
+
+            target_card = self._find_pending_card(
+                current, section_name, target_title, handled_cards, position
+            )
+            if target_card is None:
                 self._log(
-                    f"[WARNING] {section_name} card #{idx + 1} disappeared between "
-                    f"snapshot and click; skipping."
+                    f"{section_name}: card {label} is no longer pending "
+                    f"(completed or re-rendered) — skipping."
                 )
                 continue
-            target_card = current[idx]
 
             # State may have shifted (became locked, became complete) while
             # we processed earlier cards.
@@ -388,13 +406,12 @@ class DailySet:
             if current_status != CardStatus.INCOMPLETE:
                 continue
 
-            title = self.cards.get_title(target_card)
-            label = title or f"#{idx + 1}"
-            if title:
-                self._log(f"  → {section_name} #{idx + 1}: {title}")
+            if target_title:
+                self._log(f"  → {section_name} #{position + 1}: {target_title}")
             else:
-                self._log(f"  → {section_name} #{idx + 1}: clicking…")
+                self._log(f"  → {section_name} #{position + 1}: clicking…")
 
+            handled_cards.add(target_card)
             if self.cards.click(
                 target_card, human, main_tab, label=label, stop_event=stop_event
             ):
@@ -419,7 +436,9 @@ class DailySet:
             for c in driver.find_elements(By.CSS_SELECTOR, selector)
             if self.cards.is_visible(c)
         ]
-        if not final_cards:
+        final_statuses = [self.cards.classify(c, section_name) for c in final_cards]
+
+        if not final_cards and attempted == 0:
             self._log(
                 f"[WARNING] {section_name} cards could not be re-read after the run; "
                 "no new completion is credited."
@@ -432,20 +451,34 @@ class DailySet:
                 "attempted": attempted,
             }
 
-        # Re-tally excluding both locked and excluded (sweepstake) cards.
-        final_actionable = 0
-        final_complete = 0
-        for c in final_cards:
-            status = self.cards.classify(c, section_name)
-            if status in (CardStatus.LOCKED, CardStatus.EXCLUDED):
-                continue
-            final_actionable += 1
-            if status == CardStatus.COMPLETE:
-                final_complete += 1
+        # Count how many of the cards this run was working on are still pending.
+        # Completion is decided by identity, not by the rendered total: the SPA
+        # drops finished cards from the DOM, so re-counting only what is left was
+        # the second half of issue #131 — three finished cards could re-read as
+        # "1/1 complete" (or as nothing at all) and the day was never marked done.
+        # The denominator therefore stays `total_actionable`, the section's
+        # actionable count taken before anything was clicked.
+        pending_titles = [
+            self.cards.get_title(card)
+            for card, status in zip(final_cards, final_statuses)
+            if status == CardStatus.INCOMPLETE
+        ]
+        still_pending = 0
+        for title in work_titles:
+            if title in pending_titles:
+                pending_titles.remove(title)
+                still_pending += 1
+            elif not title and "" in pending_titles:
+                # An unreadable title can only be matched positionally.
+                pending_titles.remove("")
+                still_pending += 1
+
+        completed_this_run = max(0, len(work_titles) - still_pending)
+        final_complete = min(already_complete + completed_this_run, total_actionable)
         newly_completed = max(0, final_complete - already_complete)
 
         self._log(
-            f"{section_name} result: {final_complete}/{final_actionable} complete "
+            f"{section_name} result: {final_complete}/{total_actionable} complete "
             f"(+{newly_completed} this run)."
         )
 
@@ -453,9 +486,45 @@ class DailySet:
             "already": already_complete,
             "newly": newly_completed,
             "final": final_complete,
-            "total": final_actionable,
+            "total": total_actionable,
             "attempted": attempted,
         }
+
+    def _find_pending_card(
+        self, current, section_name, target_title, handled_cards, position
+    ):
+        """
+        Return the pending card this iteration is for, or None.
+
+        Matching is by title, skipping cards already handled in this pass, so two
+        cards that happen to share a title are still each clicked once. As a
+        second guard the returned card must currently classify as INCOMPLETE —
+        the section can re-render between reads and hand back a card that just
+        finished. A card whose title can't be read at all falls back to its
+        position, which is the only handle left for it.
+        """
+        if target_title:
+            for candidate in current:
+                if candidate in handled_cards:
+                    continue
+                if self.cards.get_title(candidate) != target_title:
+                    continue
+                if (
+                    self.cards.classify(candidate, section_name)
+                    != CardStatus.INCOMPLETE
+                ):
+                    continue
+                return candidate
+            return None
+
+        if position < len(current):
+            candidate = current[position]
+            if candidate in handled_cards:
+                return None
+            if self.cards.classify(candidate, section_name) != CardStatus.INCOMPLETE:
+                return None
+            return candidate
+        return None
 
     # -- Top-level entry point -------------------------------------------------
 

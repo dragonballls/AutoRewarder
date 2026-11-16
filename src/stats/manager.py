@@ -237,6 +237,7 @@ class StatsManager:
                 "quest_tasks": 0,
                 "points_estimate": 0,
                 "points_delta": None,
+                "balance_change": None,
             },
             # Per-day activity aggregates for the dashboard timeline, keyed by
             # "YYYY-MM-DD" → {pc, mobile, cards, runs}. Capped to _DAILY_KEEP
@@ -441,11 +442,22 @@ class StatsManager:
 
         # Balance delta: difference against the previously-stored balance. Only
         # meaningful when we have both a fresh scrape and a prior value.
+        #
+        # The delta is what the dashboard shows as "points earned this session",
+        # so a drop must never be reported as a negative gain: redeeming a gift
+        # card (or any spend) lowers the real balance and used to leave the stat
+        # stuck showing a negative number until the next run earned past it
+        # (issue #161). The raw change is still recorded as `balance_change` so
+        # the spend stays visible, while `points_delta` stays None and the
+        # dashboard falls back to the activity estimate for that run.
         points_delta = None
+        balance_change = None
         if balance is not None:
             prior = stats["balance"]["current"]
             if isinstance(prior, int):
-                points_delta = balance - prior
+                balance_change = balance - prior
+                if balance_change >= 0:
+                    points_delta = balance_change
             stats["balance"]["previous"] = prior
             stats["balance"]["current"] = balance
             stats["balance"]["updated_at"] = now_iso
@@ -459,6 +471,7 @@ class StatsManager:
             "quest_tasks": quests,
             "points_estimate": session_estimate,
             "points_delta": points_delta,
+            "balance_change": balance_change,
         }
 
         # Fold this run into today's per-day aggregate. Pre-existing day

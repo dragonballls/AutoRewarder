@@ -17,14 +17,44 @@ if is_windows:
 else:
     hidden_imports += ['PySide6', 'gi']
 
+
+def optional_data_files(package):
+    """Data files of an optional dependency; empty when it isn't installed.
+
+    The app survives a missing nlpaug (it searches the queries unchanged), so a
+    build machine without it must not fail the build. Without this bundle the
+    typo pass silently no-ops in the frozen app.
+    """
+    try:
+        return collect_data_files(package)
+    except Exception:
+        print(f"[spec] {package} data files unavailable; building without them.")
+        return []
+
+
+def optional_metadata(package):
+    """Distribution metadata of an optional dependency; empty when unavailable.
+
+    nlpaug reads package metadata at import time and raises PackageNotFoundError
+    when it is absent, which used to crash the static-query fallback in the
+    frozen build (issue #160). Bundling the metadata is what keeps that import
+    working; skipping it here only degrades to the un-augmented path.
+    """
+    try:
+        return copy_metadata(package)
+    except Exception:
+        print(f"[spec] {package} metadata unavailable; building without it.")
+        return []
+
+
 a = Analysis(
     ['AutoRewarder.py'],
     pathex=[],
     binaries=[],
     datas=[('gui', 'gui'), ('assets', 'assets')]
-        + collect_data_files('nlpaug')
-        + copy_metadata('gdown')
-        + copy_metadata('nlpaug'),
+        + optional_data_files('nlpaug')
+        + optional_metadata('gdown')
+        + optional_metadata('nlpaug'),
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
