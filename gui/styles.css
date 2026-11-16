@@ -1985,3 +1985,13 @@ input[type="number"]:focus {
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+
+/* Read-only Rewards activity category review */
+.activity-filter-label { display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
+.activity-filter-label select { max-width: 190px; }
+.activity-discovery-results { margin: 8px 0; }
+.activity-filter-note { margin: 0; color: var(--text-muted); font-size: 12px; }
+.activity-discovery-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.activity-discovery-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 12px; }
+.activity-discovery-list li span { color: var(--text-muted); }
