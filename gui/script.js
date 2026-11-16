@@ -1012,6 +1012,7 @@ function open_settings_modal(panelId) {
     llmDefaultModels = cfg.default_models || {};
     llm_render_model_options(cfg.llm_model || '');
     llm_apply_base_url_state();
+    llm_apply_key_state();
     llm_update_key_link();
     if (keyInput) {
       keyInput.value = cfg.llm_api_key || '';
@@ -1279,7 +1280,8 @@ function llm_on_provider_change() {
   llm_apply_base_url_state();
   llm_apply_key_state();
   llm_set_model_hint(loaded.length ? llm_loaded_hint() : LLM_MODEL_HINT_IDLE, false);
-  if (provider === 'ollama' && !loaded.length) llm_load_models();
+  const toggle = document.getElementById('llmToggle');
+  if (provider === 'ollama' && !loaded.length && toggle && toggle.checked) llm_load_models();
 }
 
 function llm_on_toggle_change() {
