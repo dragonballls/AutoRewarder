@@ -125,21 +125,19 @@ Adding another account is slightly different, so please follow these steps:
 
 ### What's Happening?
 
-- AutoRewarder opens Microsoft Edge (you can see it if hide-browser is off)
-- It performs random searches from a built-in list of +10k real search queries (from a google-trends dataset) or from your own LLM provider (if enabled)
-- Each search has human-like delays and behavior
-- Before any normal PC or Mobile search queries, it attempts the visible Daily Set + "More Activities" actions, then Visual Search, followed by one read-only activity review.
-- It runs the PC search phase first, then the Mobile phase (iPhone emulation). If PC searches are set to 0 but Mobile searches are requested, it still performs the desktop task pass before Mobile searches.
-- It may occasionally switch to Images/Videos/News tabs during search phases
-- It may take short "coffee breaks" during longer sessions
+- AutoRewarder opens Microsoft Edge (you can see it if hide-browser is off).
+- Before normal PC or Mobile searches, it attempts the visible Daily Set and "More Activities" tasks.
+- It then attempts Visual Search, marking it complete only when Rewards progress increases from a recorded pre-run baseline.
+- Next, it makes one read-only pass over the Rewards dashboard and /earn page to identify Read to Earn, Explore on Bing, and other visible activity types. Results appear in the Activity log for you to review and complete yourself.
+- The activity-discovery pass does not open activity cards, read articles, answer quizzes or polls, or claim points. Those discovered activities remain manual.
+- After the dashboard task pass, it performs the requested PC searches first, followed by Mobile searches (iPhone emulation). When PC searches are set to 0 but Mobile searches are requested, it still completes the desktop task pass before starting Mobile searches.
+- Search queries come from the built-in dataset or your configured LLM provider (if enabled). Query generation is also deferred until after the dashboard task pass.
+- Each search has human-like delays and behavior. It may occasionally switch to Images/Videos/News tabs during search phases.
+- It may take short coffee breaks during longer sessions.
 - If Schedule is enabled and Advanced scheduling is on, searches are paced across the schedule duration using the queries-per-hour target. You will see a clear "Done!" message in the logs when the advanced scheduling run fully completes.
 - A Daily Set is marked complete only after a fresh dashboard read verifies every original actionable card is complete; otherwise it remains eligible for retry.
-- The activity review checks the Rewards dashboard and /earn page for Read to Earn, Explore on Bing, and other visible activity types. Results appear in the Activity log for you to review and complete yourself.
-- The activity-discovery pass does not open activity cards, run searches, read articles, answer quizzes or polls, or claim points.
-- The activity-discovery pass does not open activity cards, run searches, read articles, answer quizzes or polls, or claim points.
-- Visual Search runs before normal PC/Mobile search queries. It is marked complete only when Rewards progress increases from a recorded pre-run baseline; otherwise it reports that credit could not be verified and leaves it unmarked.
-- The process continues until all searches are complete, or until you click **Stop**
-- You'll see updates in the log window
+- The process continues until all searches are complete, or until you click **Stop**.
+- You'll see updates in the log window.
 
 If a new version is available, AutoRewarder can show an update notification and a download link.
 
