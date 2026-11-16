@@ -14,6 +14,7 @@ $Branch = "feat/local-ollama-support-assistant"
 $Workflow = "build-windows.yml"
 $ArtifactName = "AutoRewarder-Ollama-Windows"
 $CanonicalDataPath = Join-Path $env:LOCALAPPDATA "AutoRewarder"
+$OllamaDataPath = Join-Path $env:LOCALAPPDATA "AutoRewarder-Ollama"
 
 function Write-Step([string]$Message) {
     Write-Host ""
@@ -163,8 +164,9 @@ Write-Step "Pre-flight checks"
 if ($env:OS -ne "Windows_NT") {
     throw "This installer must be run on Windows."
 }
-if (Get-Process -Name "AutoRewarder" -ErrorAction SilentlyContinue) {
-    throw "AutoRewarder is still running. Close the old app (including its tray icon) and rerun this script. No files have been changed."
+if ((Get-Process -Name "AutoRewarder" -ErrorAction SilentlyContinue) -or
+    (Get-Process -Name "AutoRewarder-Ollama" -ErrorAction SilentlyContinue)) {
+    throw "AutoRewarder is still running. Close the original and Ollama edition (including tray icons) and rerun this script. No files have been changed."
 }
 if (!(Test-Path -LiteralPath $env:LOCALAPPDATA -PathType Container)) {
     throw "The Windows Local AppData folder could not be found."
@@ -188,6 +190,7 @@ if ([string]::IsNullOrWhiteSpace($LegacyDataPath)) {
 }
 $LegacyDataPath = [IO.Path]::GetFullPath($LegacyDataPath)
 $CanonicalDataPath = [IO.Path]::GetFullPath($CanonicalDataPath)
+$OllamaDataPath = [IO.Path]::GetFullPath($OllamaDataPath)
 
 if (!(Test-Path -LiteralPath $LegacyDataPath -PathType Container)) {
     throw "The old AutoRewarder data folder was not found at '$LegacyDataPath'. If the old build was portable, rerun with -LegacyDataPath pointing to its config folder. Nothing has been changed."
@@ -202,31 +205,44 @@ if (!(Test-Path -LiteralPath (Join-Path $LegacyDataPath "settings.json")) -and
 Write-Host ("Found {0} account entry/entries and {1} profile folder(s)." -f $sourceSummary.AccountCount, $sourceSummary.ProfileFolderCount)
 Write-Host ("Data source: $LegacyDataPath")
 Write-Host ("New app folder: $InstallPath")
-Write-Host "The existing app installation will not be removed."
+Write-Host ("New app data folder: $OllamaDataPath")
+Write-Host "The existing app installation and original data folder will not be removed."
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backupRoot = Join-Path $env:LOCALAPPDATA "AutoRewarder-Backups"
 $backupPath = Join-Path $backupRoot "AutoRewarder-$stamp"
 New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
 
-Write-Step "Back up the existing settings and every account profile"
-if ($LegacyDataPath -eq $CanonicalDataPath) {
-    $backupDataPath = Join-Path $backupPath "data"
-    $verified = Backup-DataFolder $LegacyDataPath $backupDataPath
-    Write-Host ("Verified backup: {0} files, {1:N1} MB." -f $verified.FileCount, ($verified.Bytes / 1MB))
-} else {
-    # Portable builds store the user data in a config folder beside the EXE.
-    $sourceBackup = Join-Path $backupPath "portable-data"
-    $null = Backup-DataFolder $LegacyDataPath $sourceBackup
-    if (Test-Path -LiteralPath $CanonicalDataPath -PathType Container) {
-        $targetBackup = Join-Path $backupPath "existing-local-data"
-        $null = Backup-DataFolder $CanonicalDataPath $targetBackup
-        Write-Host "Both portable and installed data folders exist. Unique files/accounts will be merged; existing local settings/files take priority."
-        Merge-MissingData $LegacyDataPath $CanonicalDataPath
+Write-Step "Back up original data and copy it into the separate Ollama data folder"
+if ($LegacyDataPath -eq $OllamaDataPath) {
+    throw "The source path points to the new Ollama data folder. Select the original AutoRewarder data folder instead."
+}
+
+# If both a portable source and the normal installed data folder exist, merge
+# both into the new copy. Existing destination files always take priority.
+$sourcePaths = @()
+if ($LegacyDataPath -ne $CanonicalDataPath -and
+    (Test-Path -LiteralPath $CanonicalDataPath -PathType Container)) {
+    $sourcePaths += $CanonicalDataPath
+}
+$sourcePaths += $LegacyDataPath
+
+if (Test-Path -LiteralPath $OllamaDataPath -PathType Container) {
+    $existingOllamaBackup = Join-Path $backupPath "existing-ollama-data"
+    $null = Backup-DataFolder $OllamaDataPath $existingOllamaBackup
+}
+New-Item -ItemType Directory -Path $OllamaDataPath -Force | Out-Null
+
+foreach ($sourcePath in $sourcePaths) {
+    if ($sourcePath -eq $CanonicalDataPath) {
+        $backupName = "original-installed-data"
     } else {
-        New-Item -ItemType Directory -Path $CanonicalDataPath -Force | Out-Null
-        Merge-MissingData $LegacyDataPath $CanonicalDataPath
+        $backupName = "original-portable-data"
     }
+    $sourceBackup = Join-Path $backupPath $backupName
+    $verified = Backup-DataFolder $sourcePath $sourceBackup
+    Write-Host ("Verified backup of {0}: {1} files, {2:N1} MB." -f $sourcePath, $verified.FileCount, ($verified.Bytes / 1MB))
+    Merge-MissingData $sourcePath $OllamaDataPath
 }
 
 Write-Step "Prepare the new app"
@@ -236,7 +252,7 @@ Expand-Archive -LiteralPath $ArchivePath -DestinationPath $tempExtract -Force
 
 # A manually downloaded GitHub Actions artifact is an outer ZIP containing
 # the actual application ZIP. Accept either form.
-$exe = Get-ChildItem -LiteralPath $tempExtract -Filter "AutoRewarder.exe" -File -Recurse |
+$exe = Get-ChildItem -LiteralPath $tempExtract -Filter "AutoRewarder-Ollama.exe" -File -Recurse |
     Select-Object -First 1
 if (!$exe) {
     $innerZip = Get-ChildItem -LiteralPath $tempExtract -Filter "*.zip" -File -Recurse |
@@ -245,12 +261,12 @@ if (!$exe) {
         $nestedExtract = Join-Path $env:TEMP ("AutoRewarder-Ollama-Nested-" + [guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Path $nestedExtract -Force | Out-Null
         Expand-Archive -LiteralPath $innerZip.FullName -DestinationPath $nestedExtract -Force
-        $exe = Get-ChildItem -LiteralPath $nestedExtract -Filter "AutoRewarder.exe" -File -Recurse |
+        $exe = Get-ChildItem -LiteralPath $nestedExtract -Filter "AutoRewarder-Ollama.exe" -File -Recurse |
             Select-Object -First 1
     }
 }
 if (!$exe) {
-    throw "The archive does not contain AutoRewarder.exe. Your existing app data and backup are untouched."
+    throw "The archive does not contain AutoRewarder-Ollama.exe. Your existing app data and backup are untouched."
 }
 $appSource = $exe.Directory.FullName
 $helperUiCandidates = @(
@@ -276,16 +292,16 @@ if (Test-Path -LiteralPath $unexpectedConfig) {
     throw "The downloaded build unexpectedly contains a config folder. It was not removed; stop here and inspect the archive."
 }
 
-$installedExe = Join-Path $InstallPath "AutoRewarder.exe"
+$installedExe = Join-Path $InstallPath "AutoRewarder-Ollama.exe"
 if (!(Test-Path -LiteralPath $installedExe -PathType Leaf)) {
     throw "The app copy did not verify. The original data and backup remain intact."
 }
-if (!(Test-Path -LiteralPath $CanonicalDataPath -PathType Container)) {
-    throw "The standard AutoRewarder data folder is missing. Do not launch yet; inspect the migration backup."
+if (!(Test-Path -LiteralPath $OllamaDataPath -PathType Container)) {
+    throw "The separate Ollama data folder is missing. Do not launch yet; inspect the migration backup."
 }
 
 Write-Step "Verify preserved accounts and profiles"
-$finalSummary = Get-DataSummary $CanonicalDataPath
+$finalSummary = Get-DataSummary $OllamaDataPath
 Write-Host ("Current data: {0} account entry/entries, {1} profile folder(s), {2} files." -f $finalSummary.AccountCount, $finalSummary.ProfileFolderCount, $finalSummary.FileCount)
 Write-Host ("Backup: $backupPath")
 Write-Host ("New app: $installedExe")
@@ -294,7 +310,7 @@ New-AppShortcut $installedExe
 
 Write-Step "Complete"
 Write-Host "The previous AutoRewarder installation was left in place."
-Write-Host "The new build uses the same Local AppData folder, so settings, account index, Edge profiles, history, task status, and statistics remain available."
+Write-Host "The Ollama edition uses a separate Local AppData folder. Settings, account entries, browser profiles, history, task status, and statistics were copied into it."
 Write-Host "Keep the backup until you have opened the new build and confirmed every account is present."
 
 if ($Launch) {
