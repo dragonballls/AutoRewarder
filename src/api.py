@@ -818,6 +818,7 @@ class AutoRewarderAPI:
                 "ok": True,
                 "activity_count": len(activities),
                 "categories": sorted({item.kind.value for item in activities}),
+                "activities": [item.to_dict() for item in activities],
             }
         except Exception as exc:
             self.log(f"[ACTIVITY TEST] Failed: {type(exc).__name__}: {exc}")
