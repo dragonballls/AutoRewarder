@@ -1027,7 +1027,7 @@ function open_settings_modal(panelId) {
     apply_llm_field_state();
     // Fill the model picker once per session when the feature is usable;
     // the refresh button re-fetches on demand.
-    if (cfg.use_llm_queries && cfg.llm_api_key) {
+    if (cfg.use_llm_queries && (cfg.llm_provider === "ollama" || cfg.llm_api_key)) {
       if (llmModelCache[llm_provider()]) llm_set_model_hint(llm_loaded_hint(), false);
       else llm_load_models();
     } else {
@@ -1108,6 +1108,7 @@ const LLM_PROVIDERS = {
   'openai-compatible': { label: 'OpenAI-compatible', keyLabel: 'your provider', keyUrl: '' },
   anthropic: { label: 'Anthropic',     keyLabel: 'the Anthropic Console', keyUrl: 'https://console.anthropic.com/settings/keys' },
   gemini:    { label: 'Google Gemini', keyLabel: 'Google AI Studio',      keyUrl: 'https://aistudio.google.com/app/apikey' },
+  ollama:    { label: 'Ollama (local)', keyLabel: 'local Ollama',           keyUrl: '' },
 };
 const LLM_CUSTOM_MODEL = '__custom__';
 const LLM_MODEL_HINT_IDLE = 'Load the list to pick a model, or keep the provider default.';
@@ -1130,11 +1131,28 @@ function llm_update_key_link() {
   const info = LLM_PROVIDERS[llm_provider()];
   link.textContent = info.keyLabel;
   link.dataset.url = info.keyUrl;
+  const hint = document.getElementById('llm_key_hint');
+  if (hint) hint.hidden = llm_provider() === 'ollama';
+}
+
+function llm_apply_key_state() {
+  const key = document.getElementById('llmApiKey');
+  const field = key ? key.closest('.form-field') : null;
+  if (field) field.hidden = llm_provider() === 'ollama';
 }
 
 function llm_apply_base_url_state() {
   const field = document.getElementById('llm_base_url_field');
-  if (field) field.hidden = llm_provider() !== 'openai-compatible';
+  const visible = llm_provider() === 'openai-compatible' || llm_provider() === 'ollama';
+  if (field) field.hidden = !visible;
+  const label = field ? field.querySelector('label') : null;
+  const input = document.getElementById('llmBaseUrl');
+  if (label) label.textContent = llm_provider() === 'ollama' ? 'Ollama URL' : 'Base URL';
+  if (input) {
+    input.placeholder = llm_provider() === 'ollama'
+      ? 'http://127.0.0.1:11434'
+      : 'https://api.example.com/v1';
+  }
 }
 
 // The model id as it will be saved; '' means the provider default.
@@ -1194,6 +1212,9 @@ function llm_set_model_hint(text, isWarning) {
 
 function llm_loaded_hint() {
   const n = (llmModelCache[llm_provider()] || []).length;
+  if (llm_provider() === 'ollama') {
+    return `${n} local Ollama model${n === 1 ? '' : 's'} available.`;
+  }
   return `${n} model${n === 1 ? '' : 's'} available for this key.`;
 }
 
@@ -1203,18 +1224,26 @@ function llm_load_models() {
   const keyInput = document.getElementById('llmApiKey');
   const baseUrlInput = document.getElementById('llmBaseUrl');
   const key = keyInput ? keyInput.value.trim() : '';
-  const baseUrl = baseUrlInput ? baseUrlInput.value.trim() : '';
+  let baseUrl = baseUrlInput ? baseUrlInput.value.trim() : '';
   const btn = document.getElementById('llmModelRefresh');
-  if (!key) {
+  if (provider !== 'ollama' && !key) {
     llm_set_model_hint('Enter an API key to load the model list.', true);
     return;
+  }
+  if (provider === 'ollama' && !baseUrl) {
+    baseUrl = 'http://127.0.0.1:11434';
   }
   if (provider === 'openai-compatible' && !baseUrl) {
     llm_set_model_hint('Enter a base URL to load the model list.', true);
     return;
   }
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
-  llm_set_model_hint(`Loading models from ${LLM_PROVIDERS[provider].label}…`, false);
+  llm_set_model_hint(
+    provider === 'ollama'
+      ? 'Looking for models installed in local Ollama…'
+      : 'Loading models from ' + LLM_PROVIDERS[provider].label + '…',
+    false
+  );
 
   const done = () => {
     if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
@@ -1248,14 +1277,18 @@ function llm_on_provider_change() {
   llm_render_model_options(loaded.some(m => m.id === current) ? current : '');
   llm_update_key_link();
   llm_apply_base_url_state();
+  llm_apply_key_state();
   llm_set_model_hint(loaded.length ? llm_loaded_hint() : LLM_MODEL_HINT_IDLE, false);
+  if (provider === 'ollama' && !loaded.length) llm_load_models();
 }
 
 function llm_on_toggle_change() {
   apply_llm_field_state();
   const toggle = document.getElementById('llmToggle');
   const keyInput = document.getElementById('llmApiKey');
-  if (toggle && toggle.checked && keyInput && keyInput.value.trim() && !llmModelCache[llm_provider()]) {
+  const provider = llm_provider();
+  const canLoad = provider === 'ollama' || Boolean(keyInput && keyInput.value.trim());
+  if (toggle && toggle.checked && canLoad && !llmModelCache[provider]) {
     llm_load_models();
   }
 }
