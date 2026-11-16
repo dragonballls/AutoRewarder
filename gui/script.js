@@ -576,15 +576,6 @@ function show_background_logs() {
   pywebview.api.open_background_logs_window();
 }
 
-function show_ai_helper() {
-  if (!window.pywebview || !pywebview.api ||
-      typeof pywebview.api.open_ai_helper_window !== 'function') {
-    show_toast('The AI helper is unavailable in this app build.', 'warning');
-    return;
-  }
-  pywebview.api.open_ai_helper_window();
-}
-
 function show_stats() {
   if (!window.pywebview || !pywebview.api || !pywebview.api.open_stats_window) return;
   pywebview.api.open_stats_window();

@@ -269,12 +269,12 @@ if (!$exe) {
     throw "The archive does not contain AutoRewarder-Ollama.exe. Your existing app data and backup are untouched."
 }
 $appSource = $exe.Directory.FullName
-$helperUiCandidates = @(
-    (Join-Path $appSource "gui\ai_helper.html"),
-    (Join-Path $appSource "_internal\gui\ai_helper.html")
+$windowCandidates = @(
+    (Join-Path $appSource "gui\index.html"),
+    (Join-Path $appSource "_internal\gui\index.html")
 )
-if (!($helperUiCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })) {
-    throw "This build does not contain the Ollama helper UI. Your existing app data and backup are untouched."
+if (!($windowCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })) {
+    throw "This build does not contain the application UI. Your existing app data and backup are untouched."
 }
 
 $InstallPath = [IO.Path]::GetFullPath($InstallPath)

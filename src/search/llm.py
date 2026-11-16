@@ -98,9 +98,7 @@ def _normalize_ollama_base_url(base_url):
         or parsed.query
         or parsed.fragment
     ):
-        raise ValueError(
-            "Ollama must use a local URL such as http://127.0.0.1:11434."
-        )
+        raise ValueError("Ollama must use a local URL such as http://127.0.0.1:11434.")
     host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
     return f"http://{host}:{parsed.port or 11434}"
 
@@ -508,7 +506,7 @@ def _list_ollama_models(base_url):
     if resp.status_code != 200:
         raise _ListError(_http_error_reason(resp.status_code))
     rows = []
-    for item in (resp.json().get("models") or []):
+    for item in resp.json().get("models") or []:
         if not isinstance(item, dict):
             continue
         model_id = item.get("model") or item.get("name")
@@ -559,7 +557,9 @@ def list_models(provider, api_key, base_url="", logger=None):
             }
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
             if logger:
-                logger(f"[WARNING] LLM (ollama) model list: invalid response or URL: {e}")
+                logger(
+                    f"[WARNING] LLM (ollama) model list: invalid response or URL: {e}"
+                )
             return {
                 "ok": False,
                 "models": [],

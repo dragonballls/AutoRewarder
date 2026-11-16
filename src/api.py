@@ -33,7 +33,6 @@ from .config import (
     stats_path,
 )
 from .utils import check_for_updates
-from .assistant.api_mixin import OllamaSupportMixin
 from .accounts import (
     AccountManager,
     AccountMetaManager,
@@ -78,7 +77,7 @@ def _normalize_run_time(value):
     return AUTOSTART_TIME
 
 
-class AutoRewarderAPI(OllamaSupportMixin):
+class AutoRewarderAPI:
     """
     Core API class for AutoRewarder.
 
