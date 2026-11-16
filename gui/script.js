@@ -2160,14 +2160,19 @@ document.addEventListener('DOMContentLoaded', function() {
   const llmKeyInput = document.getElementById('llmApiKey');
   if (llmKeyInput) {
     llmKeyInput.addEventListener('change', () => {
-      if (llmKeyInput.value.trim()) llm_load_models();
+      if (llm_provider() !== 'ollama' && llmKeyInput.value.trim()) llm_load_models();
     });
   }
   const llmBaseUrlInput = document.getElementById('llmBaseUrl');
   if (llmBaseUrlInput) {
     llmBaseUrlInput.addEventListener('change', () => {
-      delete llmModelCache['openai-compatible'];
-      if (llmBaseUrlInput.value.trim() && llmKeyInput && llmKeyInput.value.trim()) {
+      const provider = llm_provider();
+      delete llmModelCache[provider];
+      const toggle = document.getElementById('llmToggle');
+      const canLoad = provider === 'ollama' ||
+        (provider === 'openai-compatible' && llmBaseUrlInput.value.trim() &&
+         llmKeyInput && llmKeyInput.value.trim());
+      if (toggle && toggle.checked && canLoad) {
         llm_load_models();
       } else {
         llm_render_model_options('');
