@@ -283,9 +283,9 @@ def generate_queries(
         count (int): number of queries to request.
         locale (str): BCP-47 locale (e.g. ``"fr-FR"``) driving the language.
         provider (str): one of ``openai`` / ``openai-compatible`` /
-            ``anthropic`` / ``gemini``.
+            ``anthropic`` / ``gemini`` / ``ollama``.
         model (str): model id; falls back to the provider default when blank.
-        api_key (str): the user's own API key.
+        api_key (str): the user's own API key; unused for local Ollama.
         logger (callable, optional): logging function.
 
     Returns:
