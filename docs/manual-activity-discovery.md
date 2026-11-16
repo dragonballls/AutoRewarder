@@ -51,3 +51,8 @@ Run the isolated suite from the repository root:
     python -m unittest discover -s tests/manual_tasks -v
 
 The tests cover classification, progress parsing, trusted-link validation, deduplication, malformed snapshots, size limits, report output, scanner page routing/restoration, partial page failures, and the absence of activity-execution commands in the read-only scanner script. They do not represent a live Microsoft Rewards compatibility test.
+
+
+## Category filter
+
+The Activity panel includes a read-only category filter for All activities, Daily Tasks Only, Search Only, Read to Earn Only, and Other Tasks Only. It filters the latest dashboard scan results; it does not start, click, submit, or complete tasks. Search Only explains that search queries are configured separately and are not dashboard activity cards. The scanner returns normalized activity records to the GUI so the filter can operate without another browser pass.
