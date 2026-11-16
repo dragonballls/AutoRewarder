@@ -13,6 +13,7 @@ query file.
 """
 
 import json
+from urllib.parse import urlsplit
 
 import requests
 
@@ -26,6 +27,7 @@ DEFAULT_MODELS = {
     "openai-compatible": "",
     "anthropic": "claude-haiku-4-5",
     "gemini": "gemini-3.1-flash-lite",
+    "ollama": "",  # blank selects the first installed local model
 }
 
 SUPPORTED_PROVIDERS = tuple(DEFAULT_MODELS.keys())
@@ -81,6 +83,53 @@ def _normalize_base_url(base_url):
     if not url.endswith("/v1"):
         url += "/v1"
     return url
+
+
+def _normalize_ollama_base_url(base_url):
+    """Accept only a local Ollama endpoint; never send prompts to remote hosts."""
+    value = (base_url or "http://127.0.0.1:11434").strip().rstrip("/")
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in ("127.0.0.1", "localhost", "::1")
+        or parsed.username
+        or parsed.password
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            "Ollama must use a local URL such as http://127.0.0.1:11434."
+        )
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    return f"http://{host}:{parsed.port or 11434}"
+
+
+def _call_ollama(prompt, base_url, model, max_tokens, logger):
+    """Call the locally running Ollama chat API and return its text answer."""
+    url = _normalize_ollama_base_url(base_url)
+    with requests.Session() as session:
+        # Ignore proxy environment variables: Ollama is local-only.
+        session.trust_env = False
+        resp = session.post(
+            f"{url}/api/chat",
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {
+                    "temperature": 1.0,
+                    "num_predict": max_tokens,
+                },
+            },
+            timeout=_TIMEOUT,
+        )
+    if resp.status_code != 200:
+        _log_http_error(logger, "ollama", resp)
+        return ""
+    body = resp.json()
+    return (body.get("message") or {}).get("content", "") or ""
 
 
 def _call_openai(prompt, model, api_key, max_tokens, logger):
@@ -246,12 +295,14 @@ def generate_queries(
         count = int(count)
     except (TypeError, ValueError):
         return []
-    if count <= 0 or not api_key:
+    if count <= 0:
         return []
 
     provider = (provider or "openai").strip().lower()
+    if provider != "ollama" and not api_key:
+        return []
     caller = _DISPATCH.get(provider)
-    if caller is None:
+    if provider != "ollama" and caller is None:
         if logger:
             logger(f"[WARNING] LLM: unsupported provider '{provider}'.")
         return []
@@ -260,7 +311,22 @@ def generate_queries(
     prompt = _build_prompt(count, locale)
 
     try:
-        if provider == "openai-compatible":
+        if provider == "ollama":
+            selected_model = model
+            if not selected_model:
+                available = list_models("ollama", "", base_url, logger=logger)
+                if not available.get("ok"):
+                    if logger:
+                        logger(
+                            f"[WARNING] LLM (ollama): "
+                            f"{available.get('error', 'No local model is available.')}"
+                        )
+                    return []
+                selected_model = available["models"][0]["id"]
+            text = _call_ollama(
+                prompt, base_url, selected_model, _max_tokens(count), logger
+            )
+        elif provider == "openai-compatible":
             text = caller(prompt, base_url, model, api_key, _max_tokens(count), logger)
         else:
             text = caller(prompt, model, api_key, _max_tokens(count), logger)
@@ -433,6 +499,25 @@ def _list_gemini(api_key):
     return [{"id": mid, "label": label} for mid, label in rows]
 
 
+def _list_ollama_models(base_url):
+    """Return installed local Ollama models. Proxy settings are deliberately ignored."""
+    url = _normalize_ollama_base_url(base_url)
+    with requests.Session() as session:
+        session.trust_env = False
+        resp = session.get(f"{url}/api/tags", timeout=_LIST_TIMEOUT)
+    if resp.status_code != 200:
+        raise _ListError(_http_error_reason(resp.status_code))
+    rows = []
+    for item in (resp.json().get("models") or []):
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("model") or item.get("name")
+        if model_id:
+            rows.append(str(model_id))
+    rows = sorted(set(rows), key=str.lower)
+    return [{"id": model_id, "label": model_id} for model_id in rows]
+
+
 _LIST_DISPATCH = {
     "openai": _list_openai,
     "openai-compatible": _list_openai_compatible,
@@ -453,6 +538,41 @@ def list_models(provider, api_key, base_url="", logger=None):
     """
     provider = (provider or "").strip().lower()
     api_key = (api_key or "").strip()
+
+    if provider == "ollama":
+        try:
+            models = _list_ollama_models(base_url)
+        except _ListError as e:
+            reason = str(e)
+            return {
+                "ok": False,
+                "models": [],
+                "error": reason[:1].upper() + reason[1:] + ".",
+            }
+        except requests.RequestException as e:
+            if logger:
+                logger(f"[WARNING] LLM (ollama) model list: network error: {e}")
+            return {
+                "ok": False,
+                "models": [],
+                "error": "Could not reach Ollama at the local URL. Check that Ollama is running.",
+            }
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+            if logger:
+                logger(f"[WARNING] LLM (ollama) model list: invalid response or URL: {e}")
+            return {
+                "ok": False,
+                "models": [],
+                "error": str(e) or "Invalid Ollama response.",
+            }
+        if not models:
+            return {
+                "ok": False,
+                "models": [],
+                "error": "No models are installed in Ollama. Pull a model first.",
+            }
+        return {"ok": True, "models": models}
+
     lister = _LIST_DISPATCH.get(provider)
     if lister is None:
         return {
