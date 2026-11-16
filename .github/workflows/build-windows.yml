@@ -1,4 +1,4 @@
-name: Build AutoRewarder with local Ollama helper
+name: Build AutoRewarder Ollama edition
 
 on:
   push:
@@ -39,17 +39,17 @@ jobs:
       - name: Package Windows application
         shell: pwsh
         run: |
-          if (!(Test-Path "dist/AutoRewarder/AutoRewarder.exe")) {
+          if (!(Test-Path "dist/AutoRewarder-Ollama/AutoRewarder-Ollama.exe")) {
             throw "The Windows build did not produce AutoRewarder.exe."
           }
           $helperCandidates = @(
-            "dist/AutoRewarder/gui/ai_helper.html",
-            "dist/AutoRewarder/_internal/gui/ai_helper.html"
+            "dist/AutoRewarder-Ollama/gui/ai_helper.html",
+            "dist/AutoRewarder-Ollama/_internal/gui/ai_helper.html"
           )
           if (!($helperCandidates | Where-Object { Test-Path $_ })) {
             throw "The Windows build is missing the Ollama helper UI."
           }
-          Compress-Archive -Path "dist/AutoRewarder" -DestinationPath "dist/AutoRewarder-Ollama-Windows.zip" -CompressionLevel Optimal -Force
+          Compress-Archive -Path "dist/AutoRewarder-Ollama" -DestinationPath "dist/AutoRewarder-Ollama-Windows.zip" -CompressionLevel Optimal -Force
 
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
@@ -66,7 +66,7 @@ jobs:
           target_commitish: feat/local-ollama-support-assistant
           name: AutoRewarder Ollama Preview
           body: |
-            Automated Windows preview build of the AutoRewarder fork with the optional local Ollama support helper.
+            Automated Windows preview build of the AutoRewarder fork with the selectable local Ollama LLM provider and optional AI helper.
 
             Source branch: feat/local-ollama-support-assistant
             Build commit: ${{ github.sha }}
