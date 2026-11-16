@@ -6,6 +6,7 @@
 
   <link rel="stylesheet" href="normalize.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="reading_companion.css">
 </head>
 <body>
 
@@ -111,6 +112,34 @@
         <span class="dot" id="dot"></span>
         <span id="status_text">Loading…</span>
       </div>
+    </section>
+
+    <!-- ==================== Manual reading companion ==================== -->
+    <section class="card reading-companion" aria-labelledby="reading_companion_title">
+      <div class="card-header">
+        <div class="card-label" id="reading_companion_title">Reading companion</div>
+        <span class="reading-help">Manual article queue and configurable timer</span>
+      </div>
+      <p class="reading-help">Enter one article per line as <code>Title | https://article-url</code>. Links open only when you press Open. The timer tracks your session; you choose when to move on.</p>
+      <textarea id="reading_links" aria-label="Article queue" placeholder="Article title | https://example.com/article"></textarea>
+      <div class="reading-controls">
+        <button id="reading_load" class="btn-secondary" type="button">Load queue</button>
+        <span id="reading_position" class="reading-help">No articles queued</span>
+      </div>
+      <ol id="reading_queue"></ol>
+      <div class="reading-controls">
+        <button id="reading_prev" class="btn-secondary" type="button" disabled>Previous</button>
+        <button id="reading_open" class="btn-secondary" type="button" disabled>Open current</button>
+        <button id="reading_next" class="btn-secondary" type="button" disabled>Next article</button>
+      </div>
+      <div class="reading-controls">
+        <label for="reading_duration">Reading timer (seconds)</label>
+        <input id="reading_duration" type="number" min="30" max="3600" value="300">
+        <span id="reading_clock" class="reading-clock">00:00</span>
+        <button id="reading_start" class="btn-secondary" type="button">Start timer</button>
+        <button id="reading_stop" class="btn-secondary" type="button" disabled>Stop</button>
+      </div>
+      <div id="reading_status" role="status" aria-live="polite">Ready. Reading and navigation remain manual.</div>
     </section>
 
     <!-- ==================== Stats card ==================== -->
@@ -485,6 +514,7 @@
 
   <script src="script.js"></script>
   <script src="settings.js"></script>
+  <script src="reading_companion.js"></script>
 
 </body>
 </html>
