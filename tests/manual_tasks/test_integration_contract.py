@@ -81,6 +81,35 @@ class ExistingWindowIntegrationTests(unittest.TestCase):
         self.assertIn("source='RUN'", method)
         self.assertIn("self._activity_discovery_attempted = True", method)
 
+    def test_dashboard_tasks_and_activity_review_precede_query_generation_and_search(self):
+        method = ast.unparse(_api_method("_run_phase"))
+        positions = [
+            method.index("self.daily_set.perform_daily_set("),
+            method.index("self._run_visual_search_if_needed()"),
+            method.index("self._review_activity_discovery(self._driver, source='RUN')"),
+            method.index("self._build_queries(count)"),
+            method.index("self.search_engine.perform_searches("),
+        ]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_mobile_only_standard_run_has_desktop_task_pass_first(self):
+        method = ast.unparse(_api_method("main"))
+        desktop_pass = method.index(
+            "self._run_phase(mobile=False, count=0, do_daily_set=True"
+        )
+        mobile_search = method.index(
+            "self._run_phase(mobile=True, count=mobile_count"
+        )
+        self.assertLess(desktop_pass, mobile_search)
+
+    def test_mobile_only_advanced_run_has_desktop_task_pass_before_batches(self):
+        method = ast.unparse(_api_method("_run_advanced_schedule"))
+        desktop_pass = method.index(
+            "self._run_phase(mobile=False, count=0, do_daily_set=True"
+        )
+        batch_loop = method.index("for i in range(num_batches)")
+        self.assertLess(desktop_pass, batch_loop)
+
     def test_review_helper_only_calls_the_read_only_scanner(self):
         method = ast.unparse(_api_method("_review_activity_discovery"))
         self.assertIn("capture_dashboard_activities(driver)", method)
