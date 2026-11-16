@@ -102,6 +102,13 @@ class DailySet:
             "earn": 0,
             "quests": 0,
         }
+        # Verified counts from the Read to Earn / Explore / check-in pass that
+        # runs beside the Daily Set (see run_earn_activities).
+        self.last_earn_totals = {
+            "read": 0,
+            "explore": 0,
+            "check_in": 0,
+        }
 
     def _log(self, message):
         if self.logger:
@@ -578,6 +585,40 @@ class DailySet:
             return result
 
         return self._perform_legacy(driver, human, stop_event=stop_event)
+
+    def run_earn_activities(self, driver, human, stop_event=None):
+        """
+        Complete the earn-page activities that are not simple click-throughs:
+        Read to Earn, Explore on Bing and the daily check-in.
+
+        These live beside the Daily Set on the same earn page but cannot be
+        credited by clicking a card and moving on — reading needs time on the
+        article, Explore needs its topics opened, and the check-in must be
+        claimed once a day. `EarnActivities` drives each of them and re-reads the
+        page to verify, so nothing here is reported as done on a click alone.
+
+        Returns:
+            dict: verified counts — {read, explore, check_in} — so the caller
+                can fold them into the session's statistics.
+        """
+        if self.dashboard_variant == "legacy":
+            # These cards only exist on the new dashboard; the legacy one has no
+            # earn page to drive.
+            return {"read": 0, "explore": 0, "check_in": 0}
+
+        from .earn_activities import EarnActivities
+
+        activities = EarnActivities(logger=self.logger)
+        try:
+            totals = activities.run(driver, human, stop_event=stop_event)
+        except Exception as e:
+            if stop_event is not None and stop_event.is_set():
+                return {"read": 0, "explore": 0, "check_in": 0}
+            self._log(f"[WARNING] Earn activities failed: {type(e).__name__}: {e}")
+            return {"read": 0, "explore": 0, "check_in": 0}
+
+        self.last_earn_totals = totals
+        return totals
 
     def read_visual_search_progress(self, driver):
         """

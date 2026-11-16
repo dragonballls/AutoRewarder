@@ -133,6 +133,7 @@ Adding another account is slightly different, so please follow these steps:
 - It may take short "coffee breaks" during longer sessions
 - If Schedule is enabled and Advanced scheduling is on, the run is paced across the schedule duration using the queries-per-hour target. You will see a clear "Done!" message in the logs when the advanced scheduling run fully completes.
 - After the PC phase, it attempts the visible Daily Set + "More Activities" actions. A Daily Set is marked complete only after a fresh dashboard read verifies every original actionable card is complete; otherwise it remains eligible for retry.
+- It then completes the three earn-page activities that a single click cannot finish: **Read to Earn** (the article is opened and read for long enough to be credited), **Explore on Bing** (the topics inside the card are opened in turn), and the **daily check-in** (claimed once a day). Each is confirmed by re-reading the card's own progress afterwards, and anything that does not advance is logged rather than counted.
 - Visual Search is attempted after the PC phase. The app marks it complete only when Rewards progress increases from a recorded pre-run baseline; otherwise it reports that credit could not be verified and leaves it unmarked.
 - The process continues until all searches are complete, or until you click **Stop**
 - You'll see updates in the log window
@@ -141,7 +142,7 @@ If a new version is available, AutoRewarder can show an update notification and 
 
 ### Daily tasks only
 
-If you've already done your searches manually (or just want to clean up the dashboard quickly), enable the **"Daily tasks only"** toggle before starting. The run skips both Bing search phases and opens the Rewards dashboard to attempt the Daily Set/More Activities actions and Visual Search. Unverified work is not recorded as complete.
+If you've already done your searches manually (or just want to clean up the dashboard quickly), enable the **"Daily tasks only"** toggle before starting. The run skips both Bing search phases and opens the Rewards dashboard to attempt the Daily Set/More Activities actions, Read to Earn, Explore on Bing, the daily check-in and Visual Search. Unverified work is not recorded as complete. Read to Earn, Explore and the check-in still run on a day whose Daily Set is already done, because they are separate points.
 
 Anything already marked as done for today is skipped, and the log says so — see [Force daily tasks & visual search](#force-daily-tasks--visual-search) to run it again anyway.
 

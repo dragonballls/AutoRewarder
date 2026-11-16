@@ -139,6 +139,11 @@ class AutoRewarderAPI:
             "earn": 0,
             "quests": 0,
         }
+        # Read / Explore / check-in completions this run, tracked apart from the
+        # Daily Set cards they are counted alongside.
+        self._session_read = 0
+        self._session_explore = 0
+        self._session_check_in = 0
         self._last_scraped_balance = None
         # Whether the Daily Set / visual search already ran in this main() call.
         # A "Force …" setting is persistent, so without these the PC batches of
@@ -2565,6 +2570,9 @@ class AutoRewarderAPI:
             "earn": 0,
             "quests": 0,
         }
+        self._session_read = 0
+        self._session_explore = 0
+        self._session_check_in = 0
         self._last_scraped_balance = None
         self._daily_set_attempted = False
         self._visual_search_attempted = False
@@ -2664,6 +2672,47 @@ class AutoRewarderAPI:
             except Exception:
                 pass
             self._run_lock.release()
+
+    def _run_earn_activities(self, human):
+        """
+        Drive Read to Earn, Explore on Bing and the daily check-in, then fold
+        the verified counts into the session statistics.
+
+        Kept in one place so the normal run and the daily-tasks-only run cannot
+        drift apart. A failure here is logged and swallowed: these are three
+        tasks among many, and none of them may take down the run that earns the
+        rest of the day's points.
+        """
+        if self.daily_set is None or self._driver is None:
+            return
+
+        try:
+            totals = self.daily_set.run_earn_activities(
+                self._driver, human, stop_event=self._stop_event
+            )
+        except Exception as e:
+            if self._stop_event.is_set():
+                return
+            self.log(f"[WARNING] Read/Explore/check-in pass failed: {e}")
+            return
+
+        read = int(totals.get("read", 0) or 0)
+        explore = int(totals.get("explore", 0) or 0)
+        check_in = int(totals.get("check_in", 0) or 0)
+
+        # These are verified against the card's own progress, so they count as
+        # completed cards. `earn`/`quests` stay reserved for the unverified
+        # opens from the generic earn-page pass.
+        self._session_counts["cards"] += read + explore + check_in
+        self._session_read += read
+        self._session_explore += explore
+        self._session_check_in += check_in
+
+        if read or explore or check_in:
+            self.log(
+                f"Earn activities complete: {read} read, {explore} explore, "
+                f"{check_in} check-in."
+            )
 
     def _try_scrape_balance(self):
         """
@@ -2786,12 +2835,25 @@ class AutoRewarderAPI:
                     self.log("Daily tasks completed and marked as done for today.")
                 else:
                     self.log("Daily tasks failed. Not marked as done for today.")
+
+                # Read to Earn, Explore on Bing and the daily check-in need more
+                # than a click, so they run as their own pass beside the Daily
+                # Set. They are attempted even when the Daily Set came up short:
+                # they are separate points.
+                if not self._stop_event.is_set():
+                    self._run_earn_activities(human)
             else:
                 self.log(
                     "Daily tasks already completed today. Skipping. "
                     "(Enable 'Force daily tasks' in Settings to run them anyway.)"
                 )
                 self._try_scrape_balance()
+
+                # These three are not covered by the Daily Set marker above, so
+                # they are still worth a pass on a day the set is already done.
+                if not self._stop_event.is_set():
+                    human = HumanBehavior(self._driver, show_cursor=True, mobile=False)
+                    self._run_earn_activities(human)
 
             # Run the visual search even if the Daily Set failed or was skipped.
             if not self._stop_event.is_set():
@@ -3255,11 +3317,20 @@ class AutoRewarderAPI:
                     else:
                         self.log("Daily Set failed. Not marked as done for today.")
 
+                # Read to Earn, Explore on Bing and the daily check-in, which
+                # need more than a click. Run beside the Daily Set whether or not
+                # it fully succeeded: they are separate points.
+                if not self._stop_event.is_set():
+                    self._run_earn_activities(human)
+
             elif daily_done and not self._stop_event.is_set():
                 self.log(
                     "Daily Set already completed today. Skipping. "
                     "(Enable 'Force daily tasks' in Settings to run it anyway.)"
                 )
+                # Not covered by the Daily Set marker, so still worth a pass.
+                human = HumanBehavior(self._driver, show_cursor=True, mobile=mobile)
+                self._run_earn_activities(human)
 
             # Visual search runs only in PC phase,
             # do_daily_set=False in Mobile phase.
