@@ -470,8 +470,8 @@ function render_activity_discovery() {
   if (!host || !filter) return;
   const mode = filter.value;
   const all = Array.isArray(window._last_discovered_activities) ? window._last_discovered_activities : [];
-  const dailyKinds = new Set(['daily_set', 'punchcard', 'quiz', 'poll', 'more_activities']);
-  const otherKinds = new Set(['explore', 'other']);
+  const dailyKinds = new Set(['daily_set', 'more_activities']);
+  const otherKinds = new Set(['explore', 'punchcard', 'quiz', 'poll', 'other']);
   const visible = all.filter(item => {
     if (mode === 'read') return item.kind === 'read_to_earn';
     if (mode === 'daily') return dailyKinds.has(item.kind);
