@@ -20,6 +20,7 @@ import webbrowser
 
 from .config import (
     APP_DIR,
+    APP_NAME,
     GUI_DIR,
     REPO,
     CURRENT_VERSION,
@@ -382,7 +383,11 @@ class AutoRewarderAPI(OllamaSupportMixin):
         if not self._webview_window:
             return
 
-        url = f"https://github.com/{REPO}/releases/latest"
+        url = (
+            "https://github.com/dragonballls/AutoRewarder/releases/tag/autorewarder-ollama-preview"
+            if APP_NAME == "AutoRewarder-Ollama"
+            else f"https://github.com/{REPO}/releases/latest"
+        )
         msg = (
             f"Update available: {latest_version} (current {CURRENT_VERSION}).\n"
             f"Link added to the log area. "
@@ -527,7 +532,11 @@ class AutoRewarderAPI(OllamaSupportMixin):
             "update_available": bool(needs_update and latest),
             "latest": latest,
             "current": CURRENT_VERSION,
-            "url": f"https://github.com/{REPO}/releases/latest",
+            "url": (
+                "https://github.com/dragonballls/AutoRewarder/releases/tag/autorewarder-ollama-preview"
+                if APP_NAME == "AutoRewarder-Ollama"
+                else f"https://github.com/{REPO}/releases/latest"
+            ),
         }
 
     def load_driver_in_background(self):
