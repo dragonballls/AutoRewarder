@@ -81,7 +81,9 @@ class ExistingWindowIntegrationTests(unittest.TestCase):
         self.assertIn("source='RUN'", method)
         self.assertIn("self._activity_discovery_attempted = True", method)
 
-    def test_dashboard_tasks_and_activity_review_precede_query_generation_and_search(self):
+    def test_dashboard_tasks_and_activity_review_precede_query_generation_and_search(
+        self,
+    ):
         method = ast.unparse(_api_method("_run_phase"))
         positions = [
             method.index("self.daily_set.perform_daily_set("),
