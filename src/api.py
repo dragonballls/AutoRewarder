@@ -2429,6 +2429,19 @@ class AutoRewarderAPI:
             f"Planning {num_batches} batches of ~{per_batch} queries, interval ~{interval:.1f}s"
         )
 
+        if pc <= 0 and mobile > 0 and not self._stop_event.is_set():
+            self.log(
+                "No PC searches requested; running desktop tasks before Mobile searches."
+            )
+            self._run_phase(
+                mobile=False,
+                count=0,
+                do_daily_set=True,
+                search_delay_range=search_delay_range,
+            )
+            if self._stop_event.is_set():
+                return
+
         pc_left = pc
         mobile_left = mobile
 
@@ -2494,8 +2507,12 @@ class AutoRewarderAPI:
         Run the bot against the currently-selected account.
 
         Default mode (daily_only=False): runs sequentially
-          1. PC phase     — desktop UA, `pc_count` Bing searches, then Daily Set.
-          2. Mobile phase — iPhone UA, `mobile_count` Bing searches only.
+          1. Desktop task pass — Daily Set / More Activities, Visual Search,
+             and one read-only activity review, before ordinary searches.
+          2. PC phase — desktop UA, `pc_count` Bing searches.
+          3. Mobile phase — iPhone UA, `mobile_count` Bing searches only.
+        If PC count is zero but Mobile count is nonzero, a zero-query desktop
+        task pass still runs before the Mobile search phase.
         Either count may be 0 to skip that phase.
 
         Daily-only mode (daily_only=True): skips searches entirely and only
@@ -2635,6 +2652,16 @@ class AutoRewarderAPI:
                         self._run_phase(
                             mobile=False,
                             count=pc_count,
+                            do_daily_set=True,
+                            search_delay_range=search_delay_range,
+                        )
+                    elif mobile_count > 0 and not self._stop_event.is_set():
+                        self.log(
+                            "No PC searches requested; running desktop tasks before Mobile searches."
+                        )
+                        self._run_phase(
+                            mobile=False,
+                            count=0,
                             do_daily_set=True,
                             search_delay_range=search_delay_range,
                         )
@@ -3153,45 +3180,24 @@ class AutoRewarderAPI:
 
     def _run_phase(self, mobile, count, do_daily_set, search_delay_range):
         """
-        Open a driver for a single phase (PC or Mobile), do `count` searches,
-        optionally run the Daily Set, then quit.
+        Run eligible dashboard tasks before any ordinary PC or Mobile searches.
 
-        Args:
-            mobile (bool): whether this is the Mobile phase (True) or PC phase (False)
-            count (int): how many searches to perform in this phase
-            do_daily_set (bool): whether to run the Daily Set after searches (PC phase only)
+        The desktop task pass is also used with count=0 when a user requests
+        Mobile searches only, so Daily Set and Visual Search are not skipped.
         """
         label = "Mobile" if mobile else "PC"
         self.log(
             f"=== {label} phase — {count} {'queries' if count != 1 else 'query'} ==="
         )
 
-        queries_to_search = self._build_queries(count)
-        if not queries_to_search:
-            self.log(f"[WARNING] {label}: no queries available. Skipping phase.")
-            if self.history is not None:
-                self.history.add_to_history(
-                    "N/A", f"[ERROR] {label}: no queries available"
-                )
-            return
-
+        # Open the browser first so dashboard tasks can run before query
+        # generation, which may itself call a remote LLM provider.
         self._driver = self.driver_manager.setup_driver(mobile=mobile)
         try:
-            done = self.search_engine.perform_searches(
-                self._driver,
-                queries_to_search,
-                mobile=mobile,
-                stop_event=self._stop_event,
-                search_delay_range=search_delay_range,
-            )
-            # Tally successful searches against the right platform bucket.
-            bucket = "mobile" if mobile else "pc"
-            self._session_counts[bucket] += int(done or 0)
-
             ran_daily_set = False
 
-            # Only the PC phase runs the Daily Set, and a day already marked as
-            # done is skipped unless "Force daily tasks" is on.
+            # Daily Set and More Activities are desktop tasks. They run before
+            # search queries and remain protected by the verified daily marker.
             daily_done = False
             force_daily = False
             if do_daily_set and self.daily_set is not None:
@@ -3244,23 +3250,53 @@ class AutoRewarderAPI:
                     "(Enable 'Force daily tasks' in Settings to run it anyway.)"
                 )
 
-            # Visual search runs only in PC phase,
-            # do_daily_set=False in Mobile phase.
+            # Visual Search follows the dashboard click-through tasks and is
+            # attempted only once per run, on the desktop pass.
             if do_daily_set and not self._stop_event.is_set():
                 self._run_visual_search_if_needed()
 
-            # When the Daily Set didn't run (mobile phase, or already done
-            # today) the rewards counter on the current Bing SERP is still a
-            # usable fallback source for the balance.
-            if not ran_daily_set and not self._stop_event.is_set():
-                self._try_scrape_balance()
-
-            # The first desktop/mobile phase adds a read-only activity review to
-            # the existing run order. It does not click, search, read, answer,
-            # claim, or otherwise change any Rewards activity.
+            # Read-only activity discovery is last in the pre-search pass.
+            # It reports other visible activities for the user to review; it
+            # does not open cards, read articles, answer prompts, or claim.
             if not self._activity_discovery_attempted and not self._stop_event.is_set():
                 self._activity_discovery_attempted = True
                 self._review_activity_discovery(self._driver, source="RUN")
+
+            # A zero-count desktop phase is intentional for Mobile-only runs:
+            # it completes the dashboard work above without generating queries.
+            if count <= 0:
+                self.log(f"{label}: no searches requested; dashboard task pass finished.")
+                return
+
+            if self._stop_event.is_set():
+                self.log(f"{label}: search phase skipped because Stop was requested.")
+                return
+
+            # Build LLM/static queries only after the pre-search tasks finish.
+            queries_to_search = self._build_queries(count)
+            if not queries_to_search:
+                self.log(f"[WARNING] {label}: no queries available. Search phase skipped.")
+                if self.history is not None:
+                    self.history.add_to_history(
+                        "N/A", f"[ERROR] {label}: no queries available"
+                    )
+                return
+
+            done = self.search_engine.perform_searches(
+                self._driver,
+                queries_to_search,
+                mobile=mobile,
+                stop_event=self._stop_event,
+                search_delay_range=search_delay_range,
+            )
+            # Tally successful searches against the right platform bucket.
+            bucket = "mobile" if mobile else "pc"
+            self._session_counts[bucket] += int(done or 0)
+
+            # The Rewards counter on the current Bing SERP is a fallback
+            # balance source when the Daily Set did not run in this phase.
+            if not ran_daily_set and not self._stop_event.is_set():
+                self._try_scrape_balance()
 
         finally:
             try:
