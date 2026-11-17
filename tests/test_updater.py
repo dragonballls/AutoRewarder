@@ -11,6 +11,7 @@ be right. It was wrong in two ways that each guaranteed it would never deliver:
 """
 
 import os
+import re
 import sys
 import unittest
 from unittest import mock
@@ -337,20 +338,11 @@ class LinuxPortabilityTests(unittest.TestCase):
         Built on 24.04 it needs GLIBC_2.38, which Debian 12, Ubuntu 22.04 and
         RHEL 9 do not have, so it fails to start with "GLIBC_2.38 not found".
         """
-        import yaml
-
-        with open(
-            os.path.join(REPO_ROOT, ".github/workflows/build-release.yml"),
-            encoding="utf-8",
-        ) as handle:
-            workflow = yaml.safe_load(handle)
-
-        runner = workflow["jobs"]["build-linux"]["runs-on"]
-        self.assertEqual(
-            runner,
-            "ubuntu-22.04",
-            f"the Linux build runs on {runner}, which raises its glibc floor",
-        )
+        workflow = self._workflow()
+        # Just this job's block, so another job's runner cannot satisfy the check.
+        job = workflow.split("  build-linux:", 1)[1].split("\n  publish:", 1)[0]
+        runners = re.findall(r"runs-on:\s*(\S+)", job)
+        self.assertEqual(runners, ["ubuntu-22.04"], f"build-linux runs on {runners}")
 
     def test_the_linux_archive_keeps_the_executable_bit(self):
         """tar.gz is used for this: a zip loses the mode through some extractors."""
