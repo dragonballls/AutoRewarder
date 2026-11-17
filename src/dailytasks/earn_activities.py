@@ -28,6 +28,8 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
+from .rewards_api import is_reportable
+
 DASHBOARD_URL = "https://rewards.bing.com/dashboard"
 EARN_URL = "https://rewards.bing.com/earn"
 
@@ -179,19 +181,18 @@ try {
 } catch (e) { return []; }
 """
 
-# Locate the daily check-in control. Tried in order: a control whose own label
-# says "check in", then the design-system brand CTA inside a card that talks
-# about a streak (the same token the claim tile uses). The label match is
-# English-only by nature; the brand-CTA pass exists so a localized label can
-# still be found, and both are verified by re-reading the card afterwards.
+# Locate the daily check-in control, for the page fallback.
+#
+# Only a control whose own label says "check in" is accepted. The previous
+# version also accepted *any* brand-styled control inside a card that mentions a
+# streak, which is how the pass ended up clicking a "check in" label on some
+# other tile, reporting "clicked, but the card did not confirm it" and leaving
+# the real check-in unclaimed. A guess that can be wrong is worse than a clear
+# "not offered": the report path above does the real work.
 _CHECK_IN_JS = r"""
 try {
   function text(node) {
     return node ? (node.textContent || '').replace(/\s+/g, ' ').trim() : '';
-  }
-  function pressable(el) {
-    return el.closest('button, [role="button"], [data-react-aria-pressable]')
-      || el;
   }
   function usable(el) {
     if (!el) return false;
@@ -207,19 +208,17 @@ try {
   for (var i = 0; i < candidates.length; i++) {
     if (!label.test(text(candidates[i]))) continue;
     if (!usable(candidates[i])) continue;
-    return { control: candidates[i], via: 'label', card: text(candidates[i]).slice(0, 120) };
-  }
-
-  var streaks = /streak|s[ée]rie|racha|serie/i;
-  var brands = document.querySelectorAll('[class*="bgCtrlBrand"]');
-  for (var b = 0; b < brands.length; b++) {
-    var card = brands[b].closest(
+    // The control must sit in a card of its own, so its state can be read back.
+    var card = candidates[i].closest(
       'article, li, [role="listitem"], [class*="card"], [class*="Card"]'
     );
-    if (!card || !streaks.test(text(card))) continue;
-    var control = pressable(brands[b]);
-    if (!usable(control)) continue;
-    return { control: control, via: 'streak-card', card: text(card).slice(0, 120) };
+    if (!card) continue;
+    return {
+      control: candidates[i],
+      via: 'label',
+      card: text(card).slice(0, 120),
+      card_text: text(card).slice(0, 400)
+    };
   }
   return null;
 } catch (e) { return null; }
@@ -233,13 +232,13 @@ try {
   function text(node) {
     return node ? (node.textContent || '').replace(/\s+/g, ' ').trim() : '';
   }
-  var streaks = /streak|s[ée]rie|racha|serie/i;
-  var cards = document.querySelectorAll('[class*="card"], [class*="Card"], article, li');
+  var streaks = /streak|s[ée]rie|racha|serie|check\s*-?\s*in/i;
+  var cards = document.querySelectorAll('article, li, [role="listitem"], [class*="card"], [class*="Card"]');
   for (var i = 0; i < cards.length; i++) {
     if (!streaks.test(text(cards[i]))) continue;
     return {
       done: !!cards[i].querySelector('[class*="statusSuccess"]'),
-      text: text(cards[i]).slice(0, 200)
+      text: text(cards[i]).slice(0, 300)
     };
   }
   return null;
@@ -267,6 +266,33 @@ def classify_earn_kind(title, text=""):
         if re.search(pattern, combined, re.IGNORECASE):
             return "check_in"
     return None
+
+
+def offer_earn_kind(offer):
+    """
+    Which of the three earn-page activities an offer record belongs to.
+
+    The offer list labels these by group as well as by title, and the group is
+    the more reliable signal: a localized title can stop matching a pattern,
+    while `dailyCheckInPromotion` stays the same field name. The title is used
+    as the fallback, which keeps a renamed group working.
+
+    Args:
+        offer (dict): a record from `rewards_api.offers_from_view_model`.
+
+    Returns:
+        str | None: "read", "explore", "check_in" or None for everything else.
+    """
+    if not isinstance(offer, dict):
+        return None
+
+    source = str(offer.get("source") or "")
+    if source == "dailyCheckInPromotion":
+        return "check_in"
+    if source == "exploreOnBingPromotions":
+        return "explore"
+
+    return classify_earn_kind(offer.get("title") or "")
 
 
 def _parse_progress(value):
@@ -299,7 +325,7 @@ class EarnActivities:
     the run or reporting work that didn't happen.
     """
 
-    def __init__(self, logger=None, read_seconds=None, pacing=True):
+    def __init__(self, logger=None, read_seconds=None, pacing=True, earner=None):
         self.logger = logger
         # Real pauses between actions; tests turn this off so they don't spend
         # half a minute waiting for human-like delays they aren't testing.
@@ -307,6 +333,10 @@ class EarnActivities:
         # Reading time, in seconds. Overridable so tests don't wait out a real
         # reading session; production always uses the module default.
         self._read_seconds = read_seconds or _READ_SECONDS
+        # The report-based earner, when the caller has one. This is what actually
+        # credits Read to Earn and the check-in: both are decided server-side by
+        # an activity report, not by how long a page was left open.
+        self._earner = earner
         # Counts from the most recent run(), mirroring DailySet.last_totals so
         # the caller can fold them into the session's stats.
         self.last_totals = {
@@ -314,6 +344,9 @@ class EarnActivities:
             "explore": 0,
             "check_in": 0,
         }
+        # Whether those counts came from reports (verified) rather than from the
+        # page-card fallback below.
+        self.last_source = "none"
 
     def _log(self, message):
         if self.logger:
@@ -634,6 +667,130 @@ class EarnActivities:
 
     # -- The three activities -------------------------------------------------
 
+    # -- Report-based passes --------------------------------------------------
+
+    def run_by_report(self, driver, human=None, stop_event=None):
+        """
+        Complete Read to Earn, Explore on Bing and the daily check-in, and count
+        only what Rewards confirms.
+
+        The report is the part that actually pays: each activity is one offer in
+        Rewards' own list, and Rewards records the credit from the report rather
+        than from the page you land on. That is why every earlier version of
+        these passes reported "done" while earning nothing.
+
+        Read to Earn and Explore are then given a second chance: if the report
+        did not move them, the page-driven pass below runs for exactly those
+        offers and the offer list is read again afterwards. Both mechanisms are
+        therefore tried, and neither is believed without the card's own progress
+        or the balance moving.
+
+        Args:
+            driver: Selenium WebDriver on a signed-in Rewards profile.
+            human: used only by the page fallback for Read/Explore.
+            stop_event (threading.Event, optional): aborts between reports.
+
+        Returns:
+            dict | None: {read, explore, check_in} verified counts, or None when
+                there is no earner or the offer list could not be read (the
+                caller then runs the page-driven pass alone).
+        """
+        if self._earner is None:
+            return None
+
+        if self._earner.view_model is None:
+            if self._earner.load(navigate=True) is None:
+                return None
+
+        totals = {"read": 0, "explore": 0, "check_in": 0}
+
+        for kind, label, page_runner in (
+            ("read", "Read to Earn", self.run_read_to_earn),
+            ("explore", "Explore on Bing", self.run_explore),
+            ("check_in", "Daily check-in", self.run_check_in),
+        ):
+            if self._stopped(stop_event):
+                break
+
+            pending = [
+                offer
+                for offer in self._earner.offers()
+                if offer_earn_kind(offer) == kind
+            ]
+            todo = [offer for offer in pending if is_reportable(offer)]
+            if not todo:
+                if pending:
+                    self._log(f"{label}: already complete.")
+                else:
+                    self._log(f"{label}: nothing pending.")
+                continue
+
+            plural = "offer" if len(todo) == 1 else "offers"
+            self._log(f"{label}: {len(todo)} {plural} to earn.")
+            result = self._earner.earn(todo, stop_event=stop_event)
+            totals[kind] = int(result.get("verified", 0) or 0)
+
+            if totals[kind]:
+                continue
+
+            # The report was accepted but moved nothing. For the two activities
+            # Rewards also pays for by use, run the page pass for these offers
+            # and read the list again — the only way to know it worked.
+            if kind in ("read", "explore") and human is not None:
+                if self._stopped(stop_event):
+                    break
+                self._log(
+                    f"[INFO] {label}: the report did not advance it; trying the "
+                    "page pass before giving up."
+                )
+                totals[kind] = self._page_fallback(
+                    driver, human, kind, pending, page_runner, stop_event
+                )
+
+            if not totals[kind]:
+                self._log(
+                    f"[WARNING] {label}: Rewards confirms no credit for it this " "run."
+                )
+
+        self.last_totals = dict(totals)
+        self.last_source = "report"
+        self._log(
+            "Earn activities: "
+            f"read {totals['read']}, "
+            f"explore {totals['explore']}, "
+            f"check-in {totals['check_in']}."
+        )
+        return dict(totals)
+
+    def _page_fallback(self, driver, human, kind, pending, runner, stop_event):
+        """
+        Run the page pass for one activity, then verify it from the offer list.
+
+        Returns:
+            int: offers Rewards now reports as complete, that were not before.
+        """
+        before = [offer["offer_id"] for offer in pending if not offer.get("complete")]
+        try:
+            runner(driver, human, stop_event=stop_event)
+        except Exception as e:
+            if self._stopped(stop_event):
+                return 0
+            self._log(f"[WARNING] {kind} page pass failed: {type(e).__name__}: {e}")
+
+        self._earner.refresh()
+        after = {offer["offer_id"]: offer for offer in self._earner.offers()}
+        confirmed = 0
+        for offer_id in before:
+            offer = after.get(offer_id)
+            if offer is None:
+                # Gone from the list. That is what a finished offer can look
+                # like, but it is also what a partial read looks like, and only
+                # one of those is credit. Do not claim it.
+                continue
+            if offer.get("complete"):
+                confirmed += 1
+        return confirmed
+
     def run_read_to_earn(self, driver, human, stop_event=None):
         """
         Complete every pending Read to Earn card.
@@ -758,7 +915,12 @@ class EarnActivities:
 
     def run_check_in(self, driver, human, stop_event=None):
         """
-        Claim today's check-in, when the dashboard offers one.
+        Claim today's check-in from the page, when the offer list can't be read.
+
+        This is the fallback. The real pass reports the check-in offer like any
+        other activity, which is what Rewards pays for; this path only clicks a
+        control whose own label says "check in" and then reads that card's state
+        back. It never reports success from the click.
 
         Returns:
             int: 1 when the click was made and the card changed, else 0.
@@ -833,6 +995,11 @@ class EarnActivities:
         that fails outright, must not stop the others from being attempted — the
         point is to collect every point available today.
 
+        The report pass runs first and, when Rewards' offer list answers, it is
+        the whole job: the page-driven passes below are what the app used to do,
+        and none of them can tell whether anything was credited. They stay for a
+        site whose offer list cannot be read.
+
         Args:
             driver: Selenium WebDriver on a signed-in Rewards profile.
             human: HumanBehavior instance used for the clicks.
@@ -843,6 +1010,12 @@ class EarnActivities:
         """
         self.last_totals = {"read": 0, "explore": 0, "check_in": 0}
 
+        if not self._stopped(stop_event):
+            reported = self.run_by_report(driver, human, stop_event=stop_event)
+            if reported is not None:
+                return reported
+
+        self.last_source = "page"
         if not self._open_earn_page(driver):
             return dict(self.last_totals)
 

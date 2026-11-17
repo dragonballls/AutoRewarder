@@ -14,6 +14,40 @@ from selenium.common.exceptions import (
 from selenium.webdriver.edge.options import Options
 
 
+def _is_closed_session(error_message):
+    """
+    Whether an error means the browser was closed, not that the work failed.
+
+    Selenium reports a closed window in a handful of ways depending on how it
+    was closed: the window is gone ("target window already closed"), the session
+    behind it is gone ("invalid session id"), or the driver has disconnected.
+    All of them are the normal end of First Setup, where the person closes the
+    browser to say they are done. Before this, closing the browser while a click
+    was still settling dumped a Chromium backtrace into the log and marked the
+    setup failed — one of the four accounts in the report died exactly this way.
+
+    Args:
+        error_message (str): the exception text, already lowercased.
+
+    Returns:
+        bool: True when the session or window went away.
+    """
+    text = str(error_message or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "target window already closed",
+            "no such window",
+            "invalid session id",
+            "session deleted because of page crash",
+            "disconnected",
+            "not reachable",
+            "chrome not reachable",
+            "connection refused",
+        )
+    )
+
+
 def describe_start_failure(exc):
     """
     Turn a driver-start exception into an explanation someone can act on.
