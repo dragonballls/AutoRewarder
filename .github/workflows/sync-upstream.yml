@@ -47,6 +47,13 @@ jobs:
             exit 1
           fi
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Match lint.yml. Without this the runner's default interpreter is
+          # newer than the pins support, and Pillow 10.4.0 has no wheel for it.
+          python-version: "3.12.10"
+
       - name: Check Python syntax
         run: python -m compileall -q src
 
