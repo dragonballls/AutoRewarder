@@ -41,14 +41,14 @@ class OllamaSearchProviderTests(unittest.TestCase):
         )
 
     @patch("src.search.llm.requests.Session")
-    def test_generates_queries_without_a_key_using_selected_model(self, session_factory):
+    def test_generates_queries_without_a_key_using_selected_model(
+        self, session_factory
+    ):
         session = self._session_mock()
         response = MagicMock()
         response.status_code = 200
         response.json.return_value = {
-            "message": {
-                "content": '["weather today", "easy dinner recipes"]'
-            }
+            "message": {"content": '["weather today", "easy dinner recipes"]'}
         }
         session.post.return_value = response
         session_factory.return_value = session
@@ -69,10 +69,10 @@ class OllamaSearchProviderTests(unittest.TestCase):
         self.assertFalse(kwargs["json"]["stream"])
 
     @patch("src.search.llm.requests.Session")
-    def test_rejects_non_loopback_ollama_urls_before_network_call(self, session_factory):
-        result = llm.list_models(
-            "ollama", "", "http://192.168.1.20:11434"
-        )
+    def test_rejects_non_loopback_ollama_urls_before_network_call(
+        self, session_factory
+    ):
+        result = llm.list_models("ollama", "", "http://192.168.1.20:11434")
 
         self.assertFalse(result["ok"])
         self.assertIn("local URL", result["error"])
@@ -83,9 +83,7 @@ class OllamaSearchProviderTests(unittest.TestCase):
         listing_session = self._session_mock()
         listing_response = MagicMock()
         listing_response.status_code = 200
-        listing_response.json.return_value = {
-            "models": [{"name": "qwen3:4b"}]
-        }
+        listing_response.json.return_value = {"models": [{"name": "qwen3:4b"}]}
         listing_session.get.return_value = listing_response
 
         chat_session = self._session_mock()
