@@ -764,8 +764,12 @@ class AutoRewarderAPI:
             self.global_settings.set_llm_config(
                 use_llm_queries, provider, model, api_key, search_locale, base_url
             )
-            state = "ON" if use_llm_queries else "OFF"
-            self.log(f"LLM query generation: {state} ({provider}).")
+            if use_llm_queries:
+                # Naming a provider next to a flat "OFF" invites the reading
+                # "it is off for ollama" when nothing is being sent anywhere.
+                self.log(f"LLM query generation: ON ({provider}).")
+            else:
+                self.log("LLM query generation: OFF — using the built-in query list.")
             return True
         except Exception as e:
             self.log(f"[WARNING] Failed to save LLM config: {e}")
@@ -818,11 +822,16 @@ class AutoRewarderAPI:
         self.log("Stop requested. Closing browser…")
         self._stop_event.set()
 
-        try:
-            if self._driver is not None:
-                self._driver.quit()
-        except Exception:
-            pass
+        # Clear the handle *before* quitting and release it after: the run
+        # thread must not race this by quitting the same driver again, and a
+        # stale object would otherwise be left for the next launch to trip over.
+        driver = self._driver
+        self._driver = None
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
         return True
 
     def get_schedule(self, account_id):
@@ -2732,7 +2741,22 @@ class AutoRewarderAPI:
             # else runs on one shared driver so the page state carries over.
             needs_driver = canonical not in ("pc_searches", "mobile_searches")
             if needs_driver:
-                driver = self.driver_manager.setup_driver(headless=True, mobile=False)
+                # A browser that refuses to start is a fault in the account's
+                # session, not in the task being tested. Report it as such,
+                # instead of the raw Chromium backtrace the run log used to get.
+                try:
+                    driver = self.driver_manager.setup_driver(
+                        headless=True, mobile=False
+                    )
+                except RuntimeError as e:
+                    self.log(f"[TEST] Could not start the browser: {e}")
+                    return {
+                        "ok": False,
+                        "reason": "browser_failed",
+                        "task": canonical,
+                        "label": TASKS[canonical]["label"],
+                        "error": str(e),
+                    }
                 # A test on a signed-out profile would report "nothing found" for
                 # every task, which looks like a broken task rather than a broken
                 # session. Say which it is.
@@ -2969,7 +2993,11 @@ class AutoRewarderAPI:
                 "(Force daily tasks is ON)."
             )
 
-        self._driver = self.driver_manager.setup_driver(mobile=False)
+        try:
+            self._driver = self.driver_manager.setup_driver(mobile=False)
+        except RuntimeError as e:
+            self.log(f"[ERROR] {e}")
+            return
         try:
             # Signed out, every task below would fail with "nothing found" and
             # look like an already-finished day. One clear message instead.
@@ -3420,7 +3448,12 @@ class AutoRewarderAPI:
                 )
             return
 
-        self._driver = self.driver_manager.setup_driver(mobile=mobile)
+        try:
+            self._driver = self.driver_manager.setup_driver(mobile=mobile)
+        except RuntimeError as e:
+            self.log(f"[ERROR] {label}: {e}")
+            self._driver = None
+            return
         try:
             # The daily tasks run after the searches, so check the session now
             # rather than after twenty minutes of searching a signed-out profile.
