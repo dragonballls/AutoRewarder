@@ -1,19 +1,17 @@
-name: Verify the published download starts
+name: Verify published download (manual)
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag to verify
-        required: false
-        default: autorewarder-ollama-preview
-  schedule:
-    - cron: "0 6 * * *"
 
 jobs:
   verify-published-download:
     runs-on: windows-latest
     steps:
+      - name: Check out the verification script
+        uses: actions/checkout@v4
+        with:
+          ref: verify/published-download
+
       - name: Download the public release asset
         shell: pwsh
         run: |
@@ -27,8 +25,6 @@ jobs:
       - name: Extract the way a user does, marker and all
         shell: pwsh
         run: |
-          # A browser download leaves Zone.Identifier on the zip; Explorer
-          # propagates it to the extracted tree.
           Set-Content -Path dl/app.zip -Stream Zone.Identifier -Value "[ZoneTransfer]`nZoneId=3`n" -NoNewline
           Expand-Archive -Path dl/app.zip -DestinationPath ex -Force
           Get-ChildItem ex -Recurse -File |
