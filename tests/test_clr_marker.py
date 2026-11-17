@@ -194,13 +194,46 @@ class WholeBundleIsClearedTests(unittest.TestCase):
         message = clr_support.describe_unblock(["a.dll"], [])
         self.assertIn("Unblocked 1", message)
 
-    def test_bundle_root_follows_pyinstaller(self):
+    def test_bundle_root_covers_the_exe_directory(self):
         fx = BundleFixture()
         try:
+            exe = os.path.join(fx.root, "AutoRewarder-Ollama.exe")
             with mock.patch.object(sys, "frozen", True, create=True), mock.patch.object(
-                sys, "_MEIPASS", fx.root, create=True
-            ):
-                self.assertEqual(clr_support._bundle_root(), fx.root)
+                sys, "_MEIPASS", os.path.join(fx.root, "_internal"), create=True
+            ), mock.patch.object(sys, "executable", exe):
+                roots = clr_support._roots()
+            # The exe sits beside _internal/, and a marked exe fails the same
+            # way a marked DLL does, so its directory must be swept too.
+            self.assertIn(fx.root, roots)
+            self.assertIn(os.path.join(fx.root, "_internal"), roots)
+        finally:
+            fx.cleanup()
+
+    def test_the_exe_itself_is_unblocked(self):
+        fx = BundleFixture()
+        try:
+            exe = os.path.join(fx.root, "AutoRewarder-Ollama.exe")
+            with open(exe, "wb") as handle:
+                handle.write(b"MZ exe")
+            store = {exe + ":" + clr_support._ZONE_STREAM: b"[ZoneTransfer]\n"}
+            real_open = open
+
+            def fake_open(path, mode="r", *a, **k):
+                if isinstance(path, str) and path in store:
+                    return io.BytesIO(store[path])
+                return real_open(path, mode, *a, **k)
+
+            def fake_remove(path):
+                if path not in store:
+                    raise OSError("no such stream")
+                store.pop(path)
+
+            with mock.patch.object(clr_support.sys, "platform", "win32"), mock.patch(
+                "builtins.open", side_effect=fake_open
+            ), mock.patch.object(clr_support.os, "remove", side_effect=fake_remove):
+                cleared, still = clr_support.unblock_bundled_files(fx.root)
+            self.assertIn(exe, cleared, "a marked exe must be unblocked too")
+            self.assertEqual(store, {})
         finally:
             fx.cleanup()
 
@@ -210,7 +243,7 @@ class WholeBundleIsClearedTests(unittest.TestCase):
             with mock.patch.object(sys, "frozen", True, create=True), mock.patch.object(
                 sys, "_MEIPASS", None, create=True
             ), mock.patch.object(sys, "executable", os.path.join(fx.root, "app.exe")):
-                self.assertEqual(clr_support._bundle_root(), fx.root)
+                self.assertEqual(clr_support._roots(), [fx.root])
         finally:
             fx.cleanup()
 

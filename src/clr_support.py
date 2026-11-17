@@ -32,13 +32,26 @@ _ZONE_STREAM = "Zone.Identifier"
 
 
 def _bundle_root():
-    """Directory holding the bundled data files, frozen or running from source."""
+    """Directory holding the app's own files, frozen or running from source."""
     if getattr(sys, "frozen", False):
-        # PyInstaller 6 puts data files under _internal/ next to the exe.
-        # Older layouts put them beside the exe directly.
-        return getattr(sys, "_MEIPASS", None) or os.path.dirname(sys.executable)
+        # Onedir layout: the exe sits beside _internal/. Walking the exe's own
+        # directory covers both the exe and the bundled data, which matters
+        # because a marked *exe* fails the same way a marked DLL does.
+        roots = [os.path.dirname(os.path.abspath(sys.executable))]
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass and meipass not in roots:
+            roots.append(meipass)
+        return roots[0] if len(roots) == 1 else roots
     # Source checkout: src/clr_support.py -> project root.
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _roots(root=None):
+    """Every directory that must be swept for the Internet marker."""
+    if root is not None:
+        return [root] if isinstance(root, str) else list(root)
+    found = _bundle_root()
+    return [found] if isinstance(found, str) else list(found)
 
 
 def has_zone_marker(path):
@@ -67,21 +80,23 @@ def _clear_zone_marker(path):
 
 
 def unblocked_paths(root=None):
-    """Paths under root that still carry the Internet marker."""
-    root = root or _bundle_root()
-    if sys.platform != "win32" or not os.path.isdir(root):
+    """Paths under the given roots that still carry the Internet marker."""
+    if sys.platform != "win32":
         return []
     marked = []
-    for directory, _dirs, files in os.walk(root):
-        for name in files:
-            path = os.path.join(directory, name)
-            if has_zone_marker(path):
-                marked.append(path)
+    for one_root in _roots(root):
+        if not os.path.isdir(one_root):
+            continue
+        for directory, _dirs, files in os.walk(one_root):
+            for name in files:
+                path = os.path.join(directory, name)
+                if has_zone_marker(path):
+                    marked.append(path)
     return marked
 
 
 def unblock_bundled_files(root=None):
-    """Remove the Internet marker from every bundled file.
+    """Remove the Internet marker from every file the app loads.
 
     Returns:
         tuple: (cleared, still_marked) — paths that were unblocked, and paths
@@ -89,8 +104,7 @@ def unblock_bundled_files(root=None):
         are empty for a local build or on another platform, where nothing is
         ever marked.
     """
-    root = root or _bundle_root()
-    if sys.platform != "win32" or not os.path.isdir(root):
+    if sys.platform != "win32":
         return [], []
 
     cleared = []
