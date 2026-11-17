@@ -4,9 +4,10 @@ name: Build and publish releases
 # what the in-app updater reads. Without this, the updater has nothing to find
 # on this repository and every user has to download by hand forever.
 #
-# Every push to main publishes a rolling release at the fixed tag `latest`, so an
-# installed copy can always update itself. Pushing a v* tag also publishes a
-# versioned release, which is the one that shows as "latest".
+# Every push to main publishes a release tagged with the version in
+# src/config.py, so an installed copy can compare itself against it and update.
+# Bumping that version and pushing publishes the next release; pushing a v* tag
+# publishes that tag too.
 
 on:
   push:
@@ -199,6 +200,25 @@ jobs:
     if: ${{ !cancelled() && needs.build-windows.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+
+      # The release tag has to be the version the app reports, because the app
+      # compares its own version against this release's tag. A release tagged
+      # "latest" parses to no version at all, so every installed copy would read
+      # it as older than itself and report "up to date" forever — the exact
+      # failure this pipeline exists to fix.
+      - name: Read the version from the code
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(python -c "import re,io;print(re.search(r'CURRENT_VERSION\s*=\s*\"([^\"]+)\"', io.open('src/config.py', encoding='utf-8').read()).group(1))")
+          case "$version" in
+            v[0-9]*) ;;
+            *) echo "::error::CURRENT_VERSION in src/config.py is not a version tag: '$version'"; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publishing as $version"
+
       - name: Download the Windows build
         uses: actions/download-artifact@v4
         with:
@@ -223,14 +243,15 @@ jobs:
           # The Windows archive is the one this release exists for.
           ls out/*.zip >/dev/null 2>&1 || { echo "::error::no Windows download to publish"; exit 1; }
 
-      # Rolling release: fixed tag, replaced on every push to main. The updater
-      # compares its own version against this release, so the tag must stay
-      # stable while the contents move.
+      # Rolling release: the tag is this build's own version, replaced on every
+      # push to main until the version in src/config.py changes. The updater
+      # compares its version against this release's tag, so the tag has to be a
+      # version it can read.
       - name: Publish the rolling release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
+          tag_name: ${{ steps.version.outputs.version }}
           target_commitish: main
           name: AutoRewarder (latest build)
           body: |

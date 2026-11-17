@@ -146,9 +146,9 @@ class PackagingContractTests(unittest.TestCase):
 
         # A release is what the updater reads; an artifact alone is invisible.
         self.assertIn("action-gh-release", workflow)
-        self.assertIn("tag_name: latest", workflow)
-        # The rolling tag must stay fixed so an installed copy can find it.
-        self.assertNotIn("tag_name: latest-${{", workflow)
+        # The tag must be a version the app can compare against. See
+        # ReleaseTagTests: a release named "latest" can never be an update.
+        self.assertIn("tag_name: ${{ steps.version.outputs.version }}", workflow)
 
     def test_the_release_carries_the_zip_the_launcher_expects(self):
         with open(
@@ -273,6 +273,50 @@ class ReleaseBlockingTests(unittest.TestCase):
     def test_the_release_fails_when_there_is_no_windows_download(self):
         """Guard against publishing a release whose only asset is missing."""
         self.assertIn("no Windows download to publish", self._workflow())
+
+
+class ReleaseTagTests(unittest.TestCase):
+    """
+    The app compares its own version against the published release's *tag*. A
+    release tagged with anything that is not a version therefore reads as older
+    than the app, and the update check reports "up to date" forever.
+    """
+
+    def _workflow(self):
+        with open(
+            os.path.join(REPO_ROOT, ".github/workflows/build-release.yml"),
+            encoding="utf-8",
+        ) as handle:
+            return handle.read()
+
+    def test_a_plain_name_tag_would_never_be_an_update(self):
+        """Pinning `tag_name: latest` is the failure, not a shortcut."""
+        self.assertFalse(is_newer_version("latest", "v4.5"))
+        self.assertEqual(_version_tuple("latest"), (0, 0, 0))
+
+    def test_the_release_is_tagged_with_the_version_the_app_reports(self):
+        workflow = self._workflow()
+        self.assertIn("tag_name: ${{ steps.version.outputs.version }}", workflow)
+        self.assertNotIn("tag_name: latest", workflow)
+
+    def test_the_tag_is_read_from_the_single_source_of_truth(self):
+        """A tag typed into the workflow would drift from the app's version."""
+        self.assertIn("src/config.py", self._workflow())
+
+    def test_the_release_tag_round_trips_as_an_updatable_version(self):
+        """
+        Publishing at the app's current version must then read as up to date,
+        and the next version must read as an update — the whole cycle.
+        """
+        self.assertFalse(
+            is_newer_version(config.CURRENT_VERSION, config.CURRENT_VERSION)
+        )
+        self.assertTrue(
+            is_newer_version(
+                f"v{_version_tuple(config.CURRENT_VERSION)[0]}.99",
+                config.CURRENT_VERSION,
+            )
+        )
 
 
 if __name__ == "__main__":
