@@ -114,7 +114,7 @@ class MarkerDiskTests(unittest.TestCase):
         target = self.fx.path("pythonnet/runtime/Python.Runtime.dll")
         set_zone_marker(target)
         cleared, still = clr_support.unblock_bundled_files(self.fx.root)
-        self.assertIn(target, cleared)
+        self.assertIn(os.path.normcase(target), [os.path.normcase(p) for p in cleared])
         self.assertEqual(still, [])
         self.assertNotIn("Zone.Identifier", read_streams(target))
 
@@ -141,7 +141,7 @@ class MarkerDiskTests(unittest.TestCase):
         exe = self.fx.path("AutoRewarder-Ollama.exe")
         set_zone_marker(exe)
         cleared, _ = clr_support.unblock_bundled_files(self.fx.root)
-        self.assertIn(exe, cleared)
+        self.assertIn(os.path.normcase(exe), [os.path.normcase(p) for p in cleared])
 
 
 class PureLogicTests(unittest.TestCase):
