@@ -52,6 +52,14 @@ jobs:
           if (!($windowCandidates | Where-Object { Test-Path $_ })) {
             throw "The Windows build is missing the application UI."
           }
+          # Ship the launcher beside the exe. Windows marks every file from a
+          # downloaded ZIP as coming from the Internet, and .NET then refuses to
+          # load the marked assemblies - a marked exe cannot start at all, so the
+          # app cannot unblock itself. This script clears the mark, then launches.
+          Copy-Item -Path "scripts/Start-AutoRewarder.ps1" -Destination "dist/AutoRewarder-Ollama/Start-AutoRewarder.ps1" -Force
+          if (!(Test-Path "dist/AutoRewarder-Ollama/Start-AutoRewarder.ps1")) {
+            throw "The Windows build is missing the launcher."
+          }
           Compress-Archive -Path "dist/AutoRewarder-Ollama" -DestinationPath "dist/AutoRewarder-Ollama-Windows.zip" -CompressionLevel Optimal -Force
 
       - name: Upload Windows build artifact

@@ -18,9 +18,20 @@ This fork tracks upstream AutoRewarder and adds the local Ollama query provider.
 
 - **[AutoRewarder-Ollama-Windows.zip](https://github.com/dragonballls/AutoRewarder/releases/download/autorewarder-ollama-preview/AutoRewarder-Ollama-Windows.zip)** — the latest Windows build
 
-Extract it and run `AutoRewarder-Ollama.exe`. It installs side-by-side with an upstream AutoRewarder, keeps its own profiles and settings, and names its executable `AutoRewarder-Ollama.exe`, so the two do not overwrite each other.
+Extract it, then **start it with `Start-AutoRewarder.ps1`** (right-click → *Run with PowerShell*, or in a terminal: `powershell -ExecutionPolicy Bypass -File .\Start-AutoRewarder.ps1`). It clears Windows' "downloaded from the Internet" marker from the extracted files and then launches the app.
 
-You can also install it with the bundled PowerShell script, which downloads and verifies the same build, then installs it for your user (`-Launch` starts it afterwards):
+That step matters. Windows marks every file unpacked from a downloaded ZIP, and .NET refuses to load a marked assembly, so double-clicking `AutoRewarder-Ollama.exe` straight after extracting fails with:
+
+```
+RuntimeError: Failed to resolve Python.Runtime.Loader.Initialize
+...\_internal\pythonnet\runtime\Python.Runtime.dll
+```
+
+or, further in, `Could not load file or assembly '...Microsoft.Web.WebView2.Core.dll' ... load from a network location`. Nothing is corrupt — the files just need unblocking, which the launcher does for you. If you prefer to do it by hand: right-click the downloaded ZIP → *Properties* → tick **Unblock** → *OK*, *then* extract.
+
+The app installs side-by-side with an upstream AutoRewarder, keeps its own profiles and settings, and names its executable `AutoRewarder-Ollama.exe`, so the two do not overwrite each other.
+
+You can also install it with the bundled PowerShell script, which downloads and verifies the same build, installs it for your user, unblocks the copied files and (`-Launch`) starts it:
 
 ```powershell
 ./scripts/Install-AutoRewarder-Ollama.ps1 -Launch
