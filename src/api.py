@@ -39,7 +39,7 @@ from .accounts import (
 )
 from .emulator import DriverManager, HumanBehavior, edge_policy
 from .search import HistoryManager, SearchEngine, llm, resolve_search_locale
-from .dailytasks import DailySet
+from .dailytasks import DailySet, EarnActivities
 from .stats import (
     StatsManager,
     scrape_points_balance,
@@ -2672,6 +2672,99 @@ class AutoRewarderAPI:
             except Exception:
                 pass
             self._run_lock.release()
+
+    def list_testable_tasks(self):
+        """
+        Return every earning task that can be run on its own, for a test UI.
+
+        Returns:
+            list of dict: [{name, label, description, page}], in run order.
+        """
+        from .dailytasks.task_test import describe_tasks
+
+        return describe_tasks()
+
+    def test_task(self, task):
+        """
+        Run exactly one earning task, to check whether it works.
+
+        This is the "try just this one" path: it opens a single browser session,
+        performs only `task`, and reports what the page said. Nothing is marked
+        as complete for the day, so testing a task in the morning cannot make
+        the real run skip it in the evening.
+
+        Args:
+            task (str): a task name from `list_testable_tasks` (or its label).
+
+        Returns:
+            dict: {ok, task, label, verified, detail, notes} — `ok` false with a
+            `reason` when the test could not run at all.
+        """
+        from .dailytasks.task_test import TaskTester, resolve_task
+
+        try:
+            canonical = resolve_task(task)
+        except ValueError as e:
+            return {"ok": False, "reason": "unknown_task", "error": str(e)}
+
+        if self.account_manager.current_id() is None:
+            return {"ok": False, "reason": "no_account"}
+        if self.account_meta is None or not self.account_meta.is_first_setup_done():
+            return {"ok": False, "reason": "setup_incomplete"}
+        if self.is_driver_loading:
+            return {"ok": False, "reason": "driver_loading"}
+        if self._balance_lock.locked():
+            return {"ok": False, "reason": "balance_refresh"}
+        if not self._run_lock.acquire(blocking=False):
+            return {"ok": False, "reason": "run_active"}
+
+        self._stop_event.clear()
+        tester = TaskTester(logger=self.log)
+        driver = None
+        try:
+            # The three browser-only tasks manage their own sessions; everything
+            # else runs on one shared driver so the page state carries over.
+            needs_driver = canonical not in ("pc_searches", "mobile_searches")
+            if needs_driver:
+                driver = self.driver_manager.setup_driver(headless=True, mobile=False)
+
+            human = (
+                HumanBehavior(driver, show_cursor=False, mobile=False)
+                if driver
+                else None
+            )
+            earn = EarnActivities(logger=self.log)
+
+            result = tester.run(
+                canonical,
+                driver=driver,
+                human=human,
+                daily_set=self.daily_set,
+                earn=earn,
+                api=self,
+                stop_event=self._stop_event,
+            )
+            self.log(
+                f"[TEST {result['label']}] "
+                f"{'verified' if result.get('verified') else 'not verified'} — "
+                f"{result.get('detail', '')}"
+            )
+            return {"ok": True, **result}
+        except Exception as e:
+            self.log(f"[TEST] Failed: {type(e).__name__}: {e}")
+            return {"ok": False, "reason": "test_failed", "error": str(e)}
+        finally:
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception as e:
+                    self.log(f"[TEST] Browser cleanup warning: {e}")
+            self._run_lock.release()
+            try:
+                if self._webview_window:
+                    self._webview_window.evaluate_js("enable_start_button()")
+            except Exception:
+                pass
 
     def _run_earn_activities(self, human):
         """

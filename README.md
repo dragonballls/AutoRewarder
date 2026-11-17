@@ -407,7 +407,7 @@ For common issues and solutions, see the [Troubleshooting](USER_GUIDE.md#trouble
 - [ ] Human typos simulation for different keyboard/language layouts (AZERTY, QWERTZ, etc.)
 - [ ] Human-like typing with random spaces/backspaces
 - [ ] Independent toggle for Visual Search task (for unsupported regions)
-- [ ] Explore on Bing support
+- [x] Explore on Bing support
 - [ ] Region-specific search query datasets (US, UK, CA, AU, IN, etc.)
 - [ ] Keyboard shortcuts
 - [ ] Per-account proxy support
