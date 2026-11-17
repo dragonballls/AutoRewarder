@@ -61,10 +61,8 @@ jobs:
       - name: Run the test suite
         run: |
           # The suite imports the app's own modules, so it needs the app's
-          # dependencies, not just requests. PyGObject/PySide6 are the Linux GUI
-          # stack and need system libraries; the tests do not use them.
-          sed -i '/PyGObject/d' requirements.txt
-          sed -i '/PySide6/d' requirements.txt
+          # dependencies, not just requests. The Linux GUI stack is a separate
+          # file and the tests do not use it, so it is not installed here.
           python -m pip install --disable-pip-version-check -r requirements.txt
           python -m unittest discover -s tests -t . -v
 

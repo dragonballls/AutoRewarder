@@ -203,11 +203,26 @@ class ReleaseBlockingTests(unittest.TestCase):
         ) as handle:
             return handle.read()
 
+    @staticmethod
+    def _dependency_lines(text):
+        """The declared requirements, without comments or blank lines."""
+        return [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+
     def _requirements(self):
         with open(
             os.path.join(REPO_ROOT, "requirements.txt"), encoding="utf-8"
         ) as handle:
-            return handle.read()
+            return "\n".join(self._dependency_lines(handle.read()))
+
+    def _linux_requirements(self):
+        with open(
+            os.path.join(REPO_ROOT, "requirements-linux.txt"), encoding="utf-8"
+        ) as handle:
+            return "\n".join(self._dependency_lines(handle.read()))
 
     def test_the_qt_binding_pywebview_imports_is_declared(self):
         """
@@ -215,17 +230,35 @@ class ReleaseBlockingTests(unittest.TestCase):
         binding to find. Neither was declared for Linux, so a packaged Linux
         build could not import the backend it opens its window with.
         """
-        requirements = self._requirements()
-        self.assertIn("PySide6", requirements)
-        self.assertIn("QtPy", requirements)
+        linux = self._linux_requirements()
+        self.assertIn("PySide6", linux)
+        self.assertIn("QtPy", linux)
 
-    def test_pygobject_is_not_installed_for_the_build(self):
+    def test_pygobject_is_not_required(self):
         """
-        The app uses the Qt backend on Linux, not GTK. PyGObject builds from
-        source against system GObject headers that a bare runner lacks, so it
-        fails the install and the whole release with it.
+        Nothing imports GTK: the window is Qt. PyGObject also builds from source
+        against system GObject headers a bare runner lacks, so requiring it
+        failed the install and took the release with it.
         """
-        self.assertIn("/PyGObject/d", self._workflow())
+        self.assertNotIn("PyGObject", self._requirements())
+        self.assertNotIn("PyGObject", self._linux_requirements())
+
+    def test_no_workflow_edits_requirements_in_place(self):
+        """
+        Every workflow used to delete lines from requirements.txt before
+        installing, which mutated a tracked file and made the checks depend on
+        the mutation instead of on what the repository says.
+        """
+        for name in ("lint.yml", "build-release.yml", "sync-upstream.yml"):
+            with open(
+                os.path.join(REPO_ROOT, ".github/workflows", name), encoding="utf-8"
+            ) as handle:
+                text = handle.read()
+            self.assertNotIn("sed -i", text, f"{name} edits files in place")
+
+    def test_the_linux_build_installs_the_gui_stack(self):
+        """A Linux build without its GUI bindings opens no window."""
+        self.assertIn("requirements-linux.txt", self._workflow())
 
     def test_the_qt_backend_is_checked_during_the_build(self):
         """A broken backend should fail the build, not the user's first run."""
