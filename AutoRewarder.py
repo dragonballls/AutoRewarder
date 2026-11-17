@@ -123,7 +123,9 @@ if __name__ == "__main__":
             return None
 
         def on_closing():
-            if allow_exit["value"]:
+            # The in-app updater has to end the process for real: a helper is
+            # waiting on this one to exit before it can replace the files.
+            if allow_exit["value"] or getattr(api, "_exiting_for_update", False):
                 return True
             try:
                 app_window.hide()

@@ -178,6 +178,121 @@ class LaunchRetryTests(unittest.TestCase):
         # The raw Chromium dump must not be the whole story.
         self.assertNotIn("[0x7ff7", message)
 
+    def test_the_first_attempt_already_clears_a_held_profile(self):
+        """
+        "Could not be started after 3 attempts" was what a locked profile looked
+        like: the first launch went straight at it, and only the retries cleared
+        it. Clearing first is cheap and saves an attempt.
+        """
+        with mock.patch.object(
+            driver_module.webdriver,
+            "Edge",
+            side_effect=SessionNotCreatedException(DEVTOOLS_ERROR),
+        ), mock.patch.object(
+            self.manager, "_remove_singleton_locks", return_value=False
+        ) as locks, mock.patch.object(
+            self.manager, "close_running_edge"
+        ) as kill:
+            with self.assertRaises(RuntimeError):
+                self.manager.setup_driver(headless=True)
+
+        self.assertEqual(locks.call_count, self.manager.START_ATTEMPTS)
+        self.assertEqual(
+            kill.call_count,
+            self.manager.START_ATTEMPTS,
+            "every attempt must start from a released profile",
+        )
+
+    def test_a_stale_debug_port_file_is_removed(self):
+        """
+        Edge writes DevToolsActivePort when it starts. A leftover copy from a
+        crash tells the next launch a port exists that nothing is listening on,
+        and Chromium exits saying the file "doesn't exist".
+        """
+        with tempfile.TemporaryDirectory() as profile:
+            with open(os.path.join(profile, "DevToolsActivePort"), "w") as handle:
+                handle.write("9222\n/devtools/browser/dead")
+            self.assertTrue(
+                DriverManager(profile_path=profile)._remove_singleton_locks()
+            )
+            self.assertFalse(
+                os.path.exists(os.path.join(profile, "DevToolsActivePort"))
+            )
+
+    def test_the_drivers_own_log_explains_the_failure(self):
+        """Selenium's summary says Edge exited; the driver's log says why."""
+        with tempfile.TemporaryDirectory() as base:
+            profile = os.path.join(base, "profile")
+            manager = DriverManager(profile_path=profile)
+            manager._prepare_profile_dir()
+            log_path = manager._driver_log_path()
+            with open(log_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "[123] Starting msedgedriver\n"
+                    "[123] Launching msedge\n"
+                    "[123] msedge exited with code -1073741510\n"
+                )
+
+            def fail(*args, **kwargs):
+                raise SessionNotCreatedException(DEVTOOLS_ERROR)
+
+            with mock.patch.object(driver_module.webdriver, "Edge", side_effect=fail):
+                with self.assertRaises(RuntimeError) as caught:
+                    manager.setup_driver(headless=True)
+
+            self.assertIn("-1073741510", str(caught.exception))
+
+    def test_no_console_window_is_ever_shown(self):
+        """
+        A windowed build has no console, so every console child gets one and
+        flashes it on screen. The driver service must refuse to show it.
+        """
+        with mock.patch.object(
+            driver_module.platform, "system", return_value="Windows"
+        ):
+            service = self.manager._build_service()
+        self.assertEqual(service.creation_flags, driver_module.CREATE_NO_WINDOW)
+
+    def test_the_warmup_resolves_the_driver_before_starting_it(self):
+        """
+        A bare `EdgeService()` has no executable path, so `start()` raises
+        "Service path cannot be None." — which is what the launch warmup did on
+        every start. Resolving it the way a real launch does is the whole job.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            profile = os.path.join(base, "profile")
+            os.makedirs(profile)
+            manager = DriverManager(profile_path=profile)
+
+            with mock.patch.object(
+                driver_module, "DriverFinder"
+            ) as finder, mock.patch.object(driver_module, "EdgeService") as service_cls:
+                finder.return_value.get_driver_path.return_value = (
+                    "/usr/bin/msedgedriver"
+                )
+                service = service_cls.return_value
+                service.env_path.return_value = None
+
+                self.assertTrue(manager.warm_up_service())
+
+                self.assertEqual(service.path, "/usr/bin/msedgedriver")
+                service.start.assert_called_once()
+                service.stop.assert_called_once()
+
+    def test_a_warmup_never_opens_a_browser(self):
+        """It must not launch Edge, or a window appears and vanishes at startup."""
+        with tempfile.TemporaryDirectory() as base:
+            profile = os.path.join(base, "profile")
+            os.makedirs(profile)
+            manager = DriverManager(profile_path=profile)
+
+            with mock.patch.object(driver_module, "DriverFinder"), mock.patch.object(
+                driver_module, "EdgeService"
+            ), mock.patch.object(driver_module.webdriver, "Edge") as edge:
+                manager.warm_up_service()
+
+            self.assertFalse(edge.called, "the warmup opened a browser window")
+
     def test_a_missing_profile_is_created_before_launching(self):
         with mock.patch.object(driver_module.webdriver, "Edge", return_value="driver"):
             self.manager.setup_driver(headless=True)

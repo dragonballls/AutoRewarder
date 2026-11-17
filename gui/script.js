@@ -193,6 +193,7 @@ function open_modal(opts) {
   const input = document.getElementById('modal_input');
   const confirmBtn = document.getElementById('modal_confirm');
   const cancelBtn = document.getElementById('modal_cancel');
+  const progress = document.getElementById('modal_progress');
 
   title.textContent = opts.title || '';
   message.textContent = opts.message || '';
@@ -201,6 +202,10 @@ function open_modal(opts) {
   input.hidden = !withInput;
   input.value = opts.inputDefault || '';
   input.placeholder = opts.inputPlaceholder || '';
+
+  // A prompt that shows progress keeps its buttons usable: the download is
+  // cancelled through the same Cancel, not by a dead window.
+  set_modal_progress(opts.withProgress ? { phase: 'starting' } : null);
 
   confirmBtn.textContent = opts.confirmLabel || 'OK';
   cancelBtn.textContent = opts.cancelLabel || 'Cancel';
@@ -213,9 +218,208 @@ function open_modal(opts) {
   return new Promise((resolve) => { _modalResolve = resolve; });
 }
 
+/**
+ * Show, update or hide the modal's progress bar.
+ * Passing null (or no state) hides it.
+ */
+function set_modal_progress(state) {
+  const wrap = document.getElementById('modal_progress');
+  const bar = document.getElementById('modal_progress_bar');
+  const label = document.getElementById('modal_progress_label');
+  if (!wrap || !bar || !label) return;
+
+  if (!state) {
+    wrap.hidden = true;
+    bar.classList.remove('indeterminate');
+    bar.style.width = '0%';
+    label.textContent = '';
+    return;
+  }
+
+  wrap.hidden = false;
+  const total = Number(state.total);
+  const done = Number(state.done) || 0;
+  if (Number.isFinite(total) && total > 0) {
+    bar.classList.remove('indeterminate');
+    bar.style.width = Math.min(100, Math.round((done / total) * 100)) + '%';
+  } else {
+    bar.classList.add('indeterminate');
+    bar.style.width = '';
+  }
+  label.textContent = state.detail || '';
+}
+
+/**
+ * Draw the update dialog for a running update, from what the API reports.
+ * Called by Python as the phases change, and polled as well so the bar still
+ * moves if a single evaluate_js call is missed.
+ */
+function update_progress_changed() {
+  if (!window.pywebview || !pywebview.api || typeof pywebview.api.get_update_progress !== 'function') return;
+  pywebview.api.get_update_progress().then(state => {
+    if (!state) return;
+    const phase = String(state.phase || '');
+    if (phase === 'downloading') {
+      const t = Number(state.total);
+      const d = Number(state.done) || 0;
+      const size = Number.isFinite(t) && t > 0
+        ? `${format_bytes(d)} of ${format_bytes(t)}`
+        : `${format_bytes(d)} downloaded`;
+      set_modal_progress({ done: d, total: t, detail: `Downloading ${size}…` });
+    } else if (phase === 'checking') {
+      set_modal_progress({ detail: 'Contacting GitHub…' });
+    } else if (phase === 'unpacking') {
+      set_modal_progress({ detail: 'Unpacking the new version…' });
+    } else if (phase === 'restarting') {
+      set_modal_progress({ detail: 'Restarting into the new version…' });
+    } else if (phase === 'failed' || phase === 'cancelled') {
+      set_modal_progress({ detail: state.detail || 'The update did not finish.' });
+    }
+  }).catch(() => {});
+}
+
+function format_bytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Offer an update that was found at launch. "Update now" downloads and
+ * restarts into it; "Later" leaves the app alone.
+ */
+function show_update_prompt(latest, current, canUpdateInPlace) {
+  if (!window.pywebview || !pywebview.api) return;
+  if (!canUpdateInPlace) {
+    // A source run cannot replace itself; say so rather than offer a button
+    // that would fail.
+    confirm_modal(
+      `Version ${latest} is available`,
+      `This copy runs from source, so it cannot update itself. Download ${latest} from GitHub to use it.`,
+      { confirmLabel: 'Open downloads', hideCancel: true }
+    ).then(() => {
+      pywebview.api.open_link('https://github.com/dragonballls/AutoRewarder/releases/latest');
+    });
+    return;
+  }
+
+  confirm_modal(
+    `Version ${latest} is available`,
+    `You are on ${current}. Updating downloads ${latest}, replaces this copy and restarts the app. Your accounts and settings are kept.`,
+    { confirmLabel: 'Update now', cancelLabel: 'Later', withProgress: false }
+  ).then((agreed) => {
+    if (!agreed) return;
+    run_in_app_update(latest);
+  });
+}
+
+/**
+ * True while an update's progress dialog is on screen. The wiring that closes
+ * a modal on Escape or a backdrop click must not hide this one: the update is
+ * still running, and a dialog that vanished would look like it had finished.
+ */
+let _updateModalOpen = false;
+
+/**
+ * Start the update and show its progress in a dialog that cannot be dismissed
+ * by accident: Cancel stops the download, and nothing on disk has changed.
+ */
+function run_in_app_update(latest) {
+  if (!window.pywebview || !pywebview.api || typeof pywebview.api.install_update !== 'function') return;
+
+  _updateModalOpen = true;
+  open_modal({
+    title: `Updating to ${latest}`,
+    message: 'The app will restart on its own when the download is ready.',
+    confirmLabel: 'Cancel update',
+    hideCancel: true,
+    withProgress: true,
+  });
+
+  // Re-point the one button at "cancel". The generic wiring in the DOMContent
+  // handler also listens on this button, so `onclick` runs alongside it and the
+  // dialog would close before the update had a chance to stop. Replace the
+  // listener outright by hiding the generic path: the modal stays up, showing
+  // "Cancelling…", until the worker reports that it stopped.
+  const confirmBtn = document.getElementById('modal_confirm');
+  const cancelBtn = document.getElementById('modal_cancel');
+  if (cancelBtn) cancelBtn.hidden = true;
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Cancel update';
+    confirmBtn.onclick = (event) => {
+      // Keep the click from reaching the generic confirm handler.
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Cancelling…';
+      pywebview.api.cancel_update();
+    };
+  }
+
+  pywebview.api.install_update().then(result => {
+    const r = result || {};
+    if (r.ok) {
+      // Poll while the worker downloads; the bar has no other clock of its own.
+      start_update_polling(latest);
+      return;
+    }
+    show_update_failure(r.error || 'The update could not start.');
+  }).catch(err => {
+    console.error('install_update failed:', err);
+    show_update_failure('The update could not start.');
+  });
+}
+
+let _updatePollTimer = null;
+
+function start_update_polling(latest) {
+  stop_update_polling();
+  _updatePollTimer = setInterval(() => {
+    if (!window.pywebview || !pywebview.api || typeof pywebview.api.get_update_progress !== 'function') return;
+    pywebview.api.get_update_progress().then(state => {
+      if (!state) return;
+      const phase = String(state.phase || '');
+      update_progress_changed();
+      if (phase === 'failed' || phase === 'cancelled') {
+        stop_update_polling();
+        show_update_failure(state.detail || 'The update did not finish.');
+      }
+      if (phase === 'restarting') {
+        stop_update_polling();
+        const confirmBtn = document.getElementById('modal_confirm');
+        if (confirmBtn) {
+          confirmBtn.disabled = true;
+          confirmBtn.textContent = 'Restarting…';
+        }
+      }
+    }).catch(() => {});
+  }, 600);
+}
+
+function stop_update_polling() {
+  if (_updatePollTimer) {
+    clearInterval(_updatePollTimer);
+    _updatePollTimer = null;
+  }
+}
+
+function show_update_failure(reason) {
+  stop_update_polling();
+  const confirmBtn = document.getElementById('modal_confirm');
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.onclick = null;
+  }
+  close_modal(false);
+  show_toast(reason, 'error');
+}
+
 function close_modal(result) {
   const backdrop = document.getElementById('app_modal');
   backdrop.hidden = true;
+  _updateModalOpen = false;
   if (_modalResolve) {
     const r = _modalResolve;
     _modalResolve = null;
@@ -240,6 +444,10 @@ function confirm_modal(title, message, opts) {
     message: message || '',
     withInput: false,
     confirmLabel: (opts && opts.confirmLabel) || 'Confirm',
+    // Passed through, or a prompt that means "not now" would offer the
+    // alarming word "Cancel" — which is not what the button does.
+    cancelLabel: (opts && opts.cancelLabel) || 'Cancel',
+    hideCancel: Boolean(opts && opts.hideCancel),
     danger: Boolean(opts && opts.danger),
   });
 }
@@ -1780,15 +1988,32 @@ function about_check_updates() {
     } else if (r.update_available) {
       status.className = 'about-status warning';
       status.appendChild(document.createTextNode(`Version ${r.latest} is available. `));
-      // Anchor built via createElement so the URL is never parsed as HTML.
-      const a = document.createElement('a');
-      a.href = '#';
-      a.textContent = 'Download';
-      a.addEventListener('click', (e) => {
-        e.preventDefault();
-        pywebview.api.open_link(String(r.url));
-      });
-      status.appendChild(a);
+      if (r.can_update_in_place) {
+        // The whole point: one click updates this copy, no download page.
+        const updateBtn = document.createElement('button');
+        updateBtn.type = 'button';
+        updateBtn.className = 'btn-primary';
+        updateBtn.textContent = 'Update now';
+        updateBtn.addEventListener('click', () => {
+          close_settings_modal({ force: true });
+          run_in_app_update(String(r.latest));
+        });
+        status.appendChild(updateBtn);
+        const size = Number(r.size);
+        if (Number.isFinite(size) && size > 0) {
+          status.appendChild(document.createTextNode(` (${format_bytes(size)})`));
+        }
+      } else {
+        // A source run cannot replace its own files, so send it to the release.
+        const a = document.createElement('a');
+        a.href = '#';
+        a.textContent = 'Download';
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          pywebview.api.open_link(String(r.url));
+        });
+        status.appendChild(a);
+      }
     } else {
       status.className = 'about-status ok';
       status.textContent = `You're up to date (${r.current}).`;
@@ -2330,12 +2555,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
   if (modalConfirm) {
     modalConfirm.addEventListener('click', () => {
+      // An update's dialog has its own button: it cancels rather than closing
+      // the dialog, because the update is still running.
+      if (_updateModalOpen) return;
       const input = document.getElementById('modal_input');
       const value = input.hidden ? true : input.value;
       close_modal(value);
     });
   }
-  if (modalCancel) modalCancel.addEventListener('click', () => close_modal(null));
+  if (modalCancel) modalCancel.addEventListener('click', () => {
+    if (_updateModalOpen) return;
+    close_modal(null);
+  });
   if (modalInput) {
     modalInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); modalConfirm.click(); }
@@ -2344,10 +2575,12 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   if (modalBackdrop) {
     modalBackdrop.addEventListener('click', (e) => {
+      if (_updateModalOpen) return;
       if (e.target === modalBackdrop) close_modal(null);
     });
   }
   document.addEventListener('keydown', (e) => {
+    if (_updateModalOpen) return;
     if (e.key === 'Escape' && modalBackdrop && !modalBackdrop.hidden) close_modal(null);
   });
 });

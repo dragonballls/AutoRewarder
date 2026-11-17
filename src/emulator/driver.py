@@ -11,7 +11,11 @@ from selenium.common.exceptions import (
     SessionNotCreatedException,
     WebDriverException,
 )
+from selenium.webdriver.common.driver_finder import DriverFinder
 from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.service import Service as EdgeService
+
+from ..utils import CREATE_NO_WINDOW, hidden_process_kwargs
 
 
 def _is_closed_session(error_message):
@@ -181,7 +185,17 @@ class DriverManager:
         Returns:
             bool: True when the locks are gone (or were never there).
         """
-        names = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+        names = (
+            "SingletonLock",
+            "SingletonCookie",
+            "SingletonSocket",
+            # The debug-port marker Edge writes when it starts and removes when
+            # it exits cleanly. A stale one makes the *next* launch find a port
+            # that nothing is listening on; Chromium then reports
+            # "DevToolsActivePort file doesn't exist" and exits, which reads as
+            # the browser crashing when it is only confused about its own state.
+            "DevToolsActivePort",
+        )
         paths = [os.path.join(self.profile_path, name) for name in names]
         existing = [path for path in paths if os.path.lexists(path)]
         if not existing:
@@ -224,6 +238,7 @@ class DriverManager:
                 capture_output=True,
                 text=True,
                 timeout=20,
+                **hidden_process_kwargs(),
             )
         except (OSError, subprocess.SubprocessError):
             return
@@ -237,11 +252,52 @@ class DriverManager:
                     ["taskkill", "/PID", pid, "/F"],
                     capture_output=True,
                     timeout=10,
+                    **hidden_process_kwargs(),
                 )
             except (OSError, subprocess.SubprocessError):
                 continue
 
     # -- Options ---------------------------------------------------------------
+
+    @staticmethod
+    def _build_service(log_path=None):
+        """
+        The msedgedriver service, started without a console window.
+
+        Selenium starts the driver as a child process. A windowed build has no
+        console for it to inherit, so Windows gives it a new one — the black box
+        that flashes on screen when a browser starts. CREATE_NO_WINDOW gives it
+        the console it needs and never shows it.
+
+        Args:
+            log_path (str, optional): where the driver writes its own log. Its
+                last lines are the only account of *why* Edge refused to start,
+                which Selenium's summary ("exited without a debugging port")
+                does not give.
+        """
+        service = EdgeService(log_output=log_path) if log_path else EdgeService()
+        if platform.system() == "Windows":
+            service.creation_flags = CREATE_NO_WINDOW
+        return service
+
+    def _driver_log_path(self):
+        """Where this profile's driver log goes (beside it, not inside)."""
+        if not self.profile_path:
+            return None
+        return os.path.join(
+            os.path.dirname(os.path.abspath(self.profile_path)),
+            "msedgedriver.log",
+        )
+
+    def _driver_log_tail(self, log_path, lines=6):
+        """The end of the driver's log, for a failure message."""
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+                content = handle.read().strip().splitlines()
+        except OSError:
+            return ""
+        interesting = [line.strip() for line in content if line.strip()]
+        return "\n".join(interesting[-lines:])
 
     def _build_options(self, headless, disable_identity, mobile):
         """Build the Edge options for one launch attempt."""
@@ -287,6 +343,46 @@ class DriverManager:
 
     # -- Launch ----------------------------------------------------------------
 
+    def warm_up_service(self):
+        """
+        Resolve and start msedgedriver, then stop it, without opening a browser.
+
+        The launch warmup is there so the first real run does not pay for the
+        driver's own download and start. Doing that properly takes two steps
+        that a bare service does not do for itself: a new `EdgeService()` has no
+        executable path until Selenium Manager finds one, and `start()` raises
+        "Service path cannot be None" without it. So resolve the path first, the
+        same way a real launch does.
+
+        Nothing is shown: the service is started with CREATE_NO_WINDOW, and no
+        browser is launched, so no window appears and vanishes at startup.
+
+        Returns:
+            bool: True when the driver was found and started.
+        """
+        if not self.profile_path:
+            return False
+
+        service = self._build_service()
+        try:
+            # Resolve exactly as a real launch does, so the warmup pays off:
+            # Selenium Manager finds (and downloads, once) the driver that
+            # matches this browser, and records it on the service.
+            options = self._build_options(
+                headless=True, disable_identity=False, mobile=False
+            )
+            finder = DriverFinder(service, options)
+            service.path = service.env_path() or finder.get_driver_path()
+            service.start()
+        finally:
+            process = getattr(service, "process", None)
+            if process is not None:
+                try:
+                    service.stop()
+                except Exception:
+                    pass
+        return True
+
     def setup_driver(self, headless=None, disable_identity=False, mobile=False):
         """
         Set up the Selenium WebDriver for MS Edge using this manager's profile.
@@ -327,19 +423,27 @@ class DriverManager:
         last_error = None
         driver = None
         for attempt in range(1, self.START_ATTEMPTS + 1):
-            # Recover before every attempt, not only the first: retrying is
-            # pointless while the lock that broke the previous attempt remains.
-            locks_clear = self._remove_singleton_locks()
-            if not locks_clear or attempt > 1:
-                self.close_running_edge()
+            # Recover before every attempt, including the first: a profile left
+            # locked by an Edge that did not fully exit is the most common
+            # cause, and trying once against a locked profile only wastes the
+            # attempt. Clearing first is cheap when nothing is holding it.
+            self._remove_singleton_locks()
+            self.close_running_edge()
+            if attempt > 1:
                 time.sleep(1.5 * attempt)
 
             options = self._build_options(headless, disable_identity, mobile)
+            log_path = self._driver_log_path()
             try:
-                driver = webdriver.Edge(options=options)
+                driver = webdriver.Edge(
+                    options=options, service=self._build_service(log_path)
+                )
                 break
             except (SessionNotCreatedException, WebDriverException) as e:
                 last_error = e
+                driver_log = self._driver_log_tail(log_path)
+                if driver_log:
+                    last_error = type(e)(f"{e}\n{driver_log}")
                 if attempt < self.START_ATTEMPTS:
                     # Jittered: a profile released by a closing Edge is usually
                     # free within a second or two.
@@ -356,6 +460,12 @@ class DriverManager:
             else:
                 first_line = str(last_error).splitlines()[0]
                 message = f"{message}\n{first_line}"
+
+            # The driver's own last lines are the only record of what Edge said
+            # before it exited; without them a report can only be guessed at.
+            driver_log = self._driver_log_tail(self._driver_log_path())
+            if driver_log:
+                message = f"{message}\nThe driver's log ends with:\n{driver_log}"
             raise RuntimeError(message) from last_error
 
         if mobile:

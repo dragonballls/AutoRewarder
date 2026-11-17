@@ -1,10 +1,53 @@
 """Shared utility helpers for AutoRewarder."""
 
+import sys
 import time
 import random
 import requests
 
 from .config import CURRENT_VERSION, REPO
+
+# Windows' CREATE_NO_WINDOW: give a child process a console it never shows.
+CREATE_NO_WINDOW = 0x08000000
+
+
+def hidden_process_kwargs(platform_name=None):
+    """
+    Subprocess flags that keep a helper from flashing a console window.
+
+    A windowed app (PyInstaller `console=False`) has no console of its own, so
+    every console program it starts — powershell, taskkill, schtasks,
+    msedgedriver — gets a new one. Those are the black boxes that flash on
+    screen for a fraction of a second while the app starts a browser or checks a
+    scheduled task. CREATE_NO_WINDOW gives them a console of their own that is
+    never shown.
+
+    On Linux there is no console window to suppress; `start_new_session` keeps
+    a child from inheriting the app's terminal signals instead.
+
+    Args:
+        platform_name (str, optional): "Windows", "Linux" or "Darwin". Defaults
+            to the running platform. Passed explicitly by the updater, which
+            decides a plan for a named platform, so a test on Linux can still
+            assert the flags Windows would get.
+
+    Returns:
+        dict: keyword arguments for subprocess.Popen / subprocess.run.
+    """
+    name = platform_name
+    if name is None:
+        if sys.platform == "win32":
+            name = "Windows"
+        elif sys.platform == "darwin":
+            name = "Darwin"
+        else:
+            name = "Linux"
+
+    if name == "Windows":
+        return {"creationflags": CREATE_NO_WINDOW}
+    if name == "Darwin":
+        return {}
+    return {"start_new_session": True}
 
 
 def human_typing(element, text):
