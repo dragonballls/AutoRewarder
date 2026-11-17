@@ -12,6 +12,24 @@ Built with a robust Python/Selenium backend, it offers two modes of operation: a
 
 ---
 
+## Download this fork
+
+This fork tracks upstream AutoRewarder and adds the local Ollama query provider. Its Windows build is published automatically from the `feat/local-ollama-support-assistant` branch:
+
+- **[AutoRewarder-Ollama-Windows.zip](https://github.com/dragonballls/AutoRewarder/releases/download/autorewarder-ollama-preview/AutoRewarder-Ollama-Windows.zip)** — the latest Windows build
+
+Extract it and run `AutoRewarder-Ollama.exe`. It installs side-by-side with an upstream AutoRewarder, keeps its own profiles and settings, and names its executable `AutoRewarder-Ollama.exe`, so the two do not overwrite each other.
+
+You can also install it with the bundled PowerShell script, which downloads and verifies the same build, then installs it for your user (`-Launch` starts it afterwards):
+
+```powershell
+./scripts/Install-AutoRewarder-Ollama.ps1 -Launch
+```
+
+The preview is rebuilt on every push to that branch, so it always matches the branch's latest commit. Keep your existing data backed up until a new build is verified.
+
+---
+
 ## Table of Contents
 
 ### Getting Started
