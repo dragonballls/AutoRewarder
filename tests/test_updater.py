@@ -319,5 +319,43 @@ class ReleaseTagTests(unittest.TestCase):
         )
 
 
+class LinuxPortabilityTests(unittest.TestCase):
+    """
+    A binary links against the glibc of the machine that builds it. Building on
+    the newest Ubuntu produces a download that will not start on older ones.
+    """
+
+    def _workflow(self):
+        with open(
+            os.path.join(REPO_ROOT, ".github/workflows/build-release.yml"),
+            encoding="utf-8",
+        ) as handle:
+            return handle.read()
+
+    def test_the_linux_build_uses_an_old_runner(self):
+        """
+        Built on 24.04 it needs GLIBC_2.38, which Debian 12, Ubuntu 22.04 and
+        RHEL 9 do not have, so it fails to start with "GLIBC_2.38 not found".
+        """
+        import yaml
+
+        with open(
+            os.path.join(REPO_ROOT, ".github/workflows/build-release.yml"),
+            encoding="utf-8",
+        ) as handle:
+            workflow = yaml.safe_load(handle)
+
+        runner = workflow["jobs"]["build-linux"]["runs-on"]
+        self.assertEqual(
+            runner,
+            "ubuntu-22.04",
+            f"the Linux build runs on {runner}, which raises its glibc floor",
+        )
+
+    def test_the_linux_archive_keeps_the_executable_bit(self):
+        """tar.gz is used for this: a zip loses the mode through some extractors."""
+        self.assertIn("tar -czf", self._workflow())
+
+
 if __name__ == "__main__":
     unittest.main()
