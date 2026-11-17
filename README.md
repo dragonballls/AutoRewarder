@@ -40,16 +40,21 @@ Built with a robust Python/Selenium backend, it offers two modes of operation: a
 
 ## Installation
 
-**Windows (Installer):**
-Download `AutoRewarder-Setup.exe` from the [latest release](https://github.com/safarsin/AutoRewarder/releases/latest) and run it. The installer will verify all dependencies and install the app for you.
-
-**Windows & Linux (Portable):**
-Download the archive for your platform from the [latest release](https://github.com/safarsin/AutoRewarder/releases/latest):
-- **Windows**: `AutoRewarder-windows.zip` (includes the `config` folder for portable use)
+Download the archive for your platform from the [latest release](https://github.com/dragonballls/AutoRewarder/releases/latest):
+- **Windows**: `AutoRewarder-windows.zip`
 - **Linux**: `AutoRewarder-linux.tar.gz`
 
-- **On Windows:** Extract the archive to any folder and run the executable. All settings and profiles will be saved locally inside the included `config` folder.
-- **On Linux:** Extract the archive and run the executable. By default, settings and profiles are saved to the standard Linux directory (`~/.local/share/AutoRewarder`). If you prefer a portable setup, simply create a `config` folder next to the executable.
+**On Windows**, extract the archive to any folder you can write to (not `Program Files`) and run `Start-AutoRewarder.ps1` for the first launch. Windows marks every file extracted from a downloaded archive as coming from the Internet, and .NET then refuses to load the app's own libraries, so the app cannot start until that mark is cleared — which is what the launcher does before starting it. After the first run, `AutoRewarder.exe` starts directly.
+
+If Windows refuses to run the script, use:
+
+    powershell -ExecutionPolicy Bypass -File .\Start-AutoRewarder.ps1
+
+**On Linux**, extract the archive and run `./AutoRewarder`. Settings and profiles are saved to `~/.local/share/AutoRewarder`; create a `config` folder next to the executable for a portable setup.
+
+### Updates
+
+The app updates itself. **Settings → About → Check for updates** reports a newer build and links to it, so you do not have to come back here and download by hand.
 
 > **Note:** Because the portable version is a single-file build, it may take a few seconds longer to start up compared to the installed version while it unpacks core components. Once open, it works at full speed.
 
@@ -183,10 +188,10 @@ See the [Development Setup](#development-setup-for-developers) section.
 
 Everything is bundled — no Python, no libraries, no manual setup required.
 
-1. Download the build for your platform from the latest release:
-   - **Windows**: `AutoRewarder-Setup.exe` (installer) or `AutoRewarder-windows.zip` (portable)
-   - **Linux**: `AutoRewarder-linux.tar.gz` (standalone executable)
-2. Install and run the app
+1. Download the build for your platform from the [latest release](https://github.com/dragonballls/AutoRewarder/releases/latest):
+   - **Windows**: `AutoRewarder-windows.zip` — run `Start-AutoRewarder.ps1` the first time
+   - **Linux**: `AutoRewarder-linux.tar.gz` — extract and run `./AutoRewarder`
+2. Run the app
 3. Add your first account and complete setup
 4. Set PC/Mobile counts and start a run
 

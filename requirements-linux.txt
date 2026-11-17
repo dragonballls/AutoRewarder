@@ -1,0 +1,15 @@
+# Dependencies only the Linux desktop build needs.
+#
+# These are kept out of requirements.txt because they are heavy, platform
+# specific, and fail to install on a machine that lacks their system libraries —
+# which used to break the lint and test jobs, so every workflow had to delete
+# them from requirements.txt before installing. Installing this file only where
+# it belongs removes that pattern.
+#
+# The app opens its window with `webview.start(gui="qt")` on Linux. pywebview
+# reaches Qt through qtpy, and qtpy needs a binding to find, so both are here:
+# with PySide6 alone qtpy raises QtBindingsNotFoundError. PyGObject is not here
+# because nothing imports GTK: the window is Qt, and PyGObject builds from source
+# against system GObject headers that a CI runner does not have.
+PySide6; sys_platform == "linux"
+QtPy; sys_platform == "linux"

@@ -407,13 +407,19 @@ If you need to access these files directly (e.g., for backup or troubleshooting)
 - In **Settings**, open the affected account under **Accounts** and choose **Re-run setup**
 
 **`session not created: DevToolsActivePort file doesn't exist` / Edge failed to start:**
-- Close AutoRewarder and any Edge windows
-- Kill all Edge and WebDriver processes:
-  - **Windows:** Open Task Manager and end all `msedge.exe` processes (and `msedgedriver.exe` if present).
-  - **Linux:** Run `pkill -f msedge` and `pkill -f msedgedriver` in your terminal.
-- Open Edge normally and complete any pending updates at `edge://settings/help`
-- Re-run AutoRewarder
-- If it still fails, open the account in **Settings** and choose **Re-run setup**
+
+AutoRewarder now handles this itself: before each launch it makes sure the account's browser profile folder exists, removes Chromium lock files left by an unclean exit, and closes any Edge process still holding that profile — then retries up to three times. If it still fails, the log explains the likely cause and what to do instead of printing a Chromium backtrace.
+
+If you see it anyway, the most likely reason is a setting in Edge itself:
+
+- In Edge, open `edge://settings/system` and turn **off** both **Startup boost** and **Continue running background extensions and apps when Microsoft Edge is closed**. These keep the profile open after the window closes, which is what makes the next launch fail.
+- Close every Edge window, including any in the system tray.
+- Re-run AutoRewarder.
+- If it still fails, open the account in **Settings** and choose **Re-run setup**, which signs in again on the same profile.
+
+**`No server is running at http://127.0.0.1:11434` when loading models:**
+
+You picked a local provider (Ollama, or an OpenAI-compatible server) but nothing is listening on that address. Start the server — for Ollama, open the Ollama app — then press **Refresh models**. Query generation keeps working from the built-in list in the meantime, so a run never depends on it.
 
 **Application crashes on startup:**
 - In **Settings**, open the affected account under **Accounts** and delete it or re-run its setup

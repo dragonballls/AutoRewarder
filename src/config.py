@@ -10,8 +10,12 @@ import os
 import platform
 import sys
 
-CURRENT_VERSION = "v4.4"
-REPO = "safarsin/AutoRewarder"
+CURRENT_VERSION = "v4.5"
+# The repository this build updates *from*: the maintainer's own fork, which is
+# where releases for this edition are published. Pointing this at upstream made
+# the updater compare against a release that does not contain these features, so
+# it reported "up to date" forever and could never deliver an update.
+REPO = "dragonballls/AutoRewarder"
 
 PLATFORM_NAME = platform.system()
 

@@ -23,11 +23,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-
-        # delete PyGObject and PySide6 from requirements.txt to avoid installation issues
-        sed -i '/PyGObject/d' requirements.txt
-        sed -i '/PySide6/d' requirements.txt
-
+        # The Linux GUI stack lives in requirements-linux.txt, so the test and
+        # lint jobs install the app's requirements as they are. They used to
+        # delete PyGObject and PySide6 from requirements.txt here, which mutated
+        # a tracked file and made the checks depend on that mutation.
         pip install -r requirements-dev.txt
 
     # pep8, code formatting, and type checking

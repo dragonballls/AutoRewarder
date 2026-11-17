@@ -104,6 +104,51 @@ def humanize_queries(queries, logger=None):
     return humanized_queries
 
 
+def _version_tuple(value):
+    """
+    Turn "v4.5" / "4.5.1" / "v4.10" into a comparable tuple of ints.
+
+    The updater used to compare tag strings with `!=`, which reports "an update
+    is available" whenever the strings differ — including when the published
+    version is *older* than the running one, so downgrading was offered as an
+    upgrade. It also can't order them: "v4.10" sorts below "v4.9" as text.
+
+    Returns:
+        tuple: e.g. (4, 5, 0); (0,) for anything unparseable, which compares
+        below every real version and so never wins by accident.
+    """
+    text = str(value or "").strip().lstrip("vV")
+    parts = []
+    for piece in text.split("."):
+        # Stop at the first non-numeric piece: "4.5-beta" is 4.5.
+        digits = ""
+        for char in piece:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            break
+        parts.append(int(digits))
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts) if parts else (0,)
+
+
+def is_newer_version(latest, current):
+    """
+    Whether `latest` is a strictly newer version than `current`.
+
+    Args:
+        latest (str): the tag or version published upstream.
+        current (str): the version this build reports.
+
+    Returns:
+        bool: True only when `latest` is newer, so an older or equal release
+        never prompts an update.
+    """
+    return _version_tuple(latest) > _version_tuple(current)
+
+
 def check_for_updates(logger=None):
     """
     Check GitHub API for the latest release and compare it to the current version.
@@ -125,7 +170,7 @@ def check_for_updates(logger=None):
         if response.status_code == 200:
             latest = response.json().get("tag_name")
             if latest:
-                return latest != CURRENT_VERSION, latest
+                return is_newer_version(latest, CURRENT_VERSION), latest
         elif response.status_code == 429:
             if logger:
                 logger("[WARNING] GitHub API rate limit reached (429).")

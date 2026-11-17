@@ -347,6 +347,47 @@ class _ListError(Exception):
     """A provider answered, but not with a usable model list."""
 
 
+class _ProviderUnreachable(_ListError):
+    """
+    Nothing is listening at the provider's address.
+
+    For a local provider (a loopback URL) this is the normal state whenever the
+    server isn't running, not a fault: someone who has Ollama configured but not
+    started gets a clear instruction instead of a connection traceback in the
+    run log. The Settings UI shows the message; the log stays quiet.
+    """
+
+    def __init__(self, message, is_local):
+        super().__init__(message)
+        self.is_local = is_local
+
+
+def _is_local_url(url):
+    """Whether a base URL points at this machine."""
+    try:
+        from urllib.parse import urlsplit
+
+        host = (urlsplit(url).hostname or "").casefold()
+    except ValueError:
+        return False
+    return host in ("localhost", "127.0.0.1", "::1", "0.0.0.0") or host.endswith(
+        ".localhost"
+    )
+
+
+def _is_connection_refused(exc):
+    """Whether a request failed because nothing is listening."""
+    text = str(exc).casefold()
+    return (
+        "connection refused" in text
+        or "actively refused" in text
+        or "max retries exceeded" in text
+        or "failed to establish a new connection" in text
+        or "name or service not known" in text
+        or "nodename nor servname" in text
+    )
+
+
 def _check_list_response(resp):
     if resp.status_code != 200:
         raise _ListError(_http_error_reason(resp.status_code))
@@ -514,6 +555,24 @@ def list_models(provider, api_key, base_url="", logger=None):
             "error": reason[:1].upper() + reason[1:] + ".",
         }
     except requests.RequestException as e:
+        # For a local provider, "nothing is listening" is its ordinary resting
+        # state, not an error worth a stack of retries in the run log. Say what
+        # to do in the UI and keep the log clean.
+        if _is_connection_refused(e):
+            local = provider in ("ollama", "openai-compatible") and (
+                _is_local_url(base_url) or not base_url
+            )
+            if provider == "ollama" or local:
+                address = base_url or "the local server"
+                return {
+                    "ok": False,
+                    "models": [],
+                    "error": (
+                        f"No server is running at {address}. "
+                        "Start it (for Ollama, open the Ollama app), then "
+                        "press Refresh models."
+                    ),
+                }
         if logger:
             logger(f"[WARNING] LLM ({provider}) model list: network error: {e}")
         return {
@@ -528,6 +587,17 @@ def list_models(provider, api_key, base_url="", logger=None):
             "ok": False,
             "models": [],
             "error": "Unexpected response from the provider.",
+        }
+    except Exception as e:  # the contract is "never raises" for the UI
+        if logger:
+            logger(
+                f"[WARNING] LLM ({provider}) model list failed: "
+                f"{type(e).__name__}: {e}"
+            )
+        return {
+            "ok": False,
+            "models": [],
+            "error": "Could not load the model list.",
         }
 
     if not models:
