@@ -123,6 +123,9 @@ class GlobalSettingsManager:
             # introduced in v3.3; users who prefer the standard X = quit
             # can flip it off in Settings. Read once at app startup.
             "close_to_tray": True,
+            # After a manual run finishes, offer the next configured account.
+            # The user must confirm the switch and start each run manually.
+            "prompt_next_account_after_run": False,
             # "Run it anyway" overrides. status.json remembers what already
             # ran today so a second run of the day skips it; these let the
             # user re-run a task whose saved status they don't trust (e.g. a
@@ -231,6 +234,16 @@ class GlobalSettingsManager:
         """Update the close_to_tray flag in settings."""
         settings = self.settings_for_update()
         settings["close_to_tray"] = bool(value)
+        self.save_settings(settings)
+
+    def get_prompt_next_account_after_run(self):
+        """Return whether to offer the next account after a manual run."""
+        return bool(self.get_settings().get("prompt_next_account_after_run", False))
+
+    def set_prompt_next_account_after_run(self, enabled):
+        """Persist the opt-in next-account prompt preference."""
+        settings = self.settings_for_update()
+        settings["prompt_next_account_after_run"] = bool(enabled)
         self.save_settings(settings)
 
     def get_current_account_id(self):
