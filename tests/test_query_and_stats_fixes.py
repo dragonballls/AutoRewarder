@@ -47,7 +47,9 @@ class HumanizeQueriesFallbackTests(unittest.TestCase):
     def test_constructor_failure_is_also_survivable(self):
         """A frozen build whose nlpaug metadata is missing raises on import."""
         queries = ["banana bread"]
-        with mock.patch("builtins.__import__", side_effect=PackageNotFoundError):
+        # Raised with a package name, as nlpaug raises it in a frozen build.
+        missing = PackageNotFoundError("nlpaug")
+        with mock.patch("builtins.__import__", side_effect=missing):
             self.assertEqual(humanize_queries(queries), queries)
 
     def test_augment_failure_keeps_the_original_query(self):
@@ -55,9 +57,9 @@ class HumanizeQueriesFallbackTests(unittest.TestCase):
             def augment(self, query):
                 raise RuntimeError("augment failed")
 
-        with mock.patch(
-            "src.utils._build_keyboard_augmenter", return_value=ExplodingAugmenter()
-        ):
+        fake_nac = mock.Mock()
+        fake_nac.KeyboardAug.return_value = ExplodingAugmenter()
+        with mock.patch.dict("sys.modules", {"nlpaug.augmenter.char": fake_nac}):
             with mock.patch("src.utils.random.random", return_value=0.0):
                 result = humanize_queries(["keep me"])
         self.assertEqual(result, ["keep me"])

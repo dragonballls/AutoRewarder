@@ -21,22 +21,29 @@ def human_typing(element, text):
         time.sleep(random.uniform(0.05, 0.18))
 
 
-def _build_keyboard_augmenter():
+def humanize_queries(queries, logger=None):
     """
-    Build the nlpaug keyboard augmenter, or return None when nlpaug is unusable.
+    Substitute character by keyboard distance to simulate human typing errors.
 
-    nlpaug is an optional dependency: it is bundled into the frozen builds, but a
-    missing or partially installed copy (and a frozen build whose package
-    metadata was not collected, which raises PackageNotFoundError from inside
-    nlpaug) must not take the run down with it.
+    Args:
+        queries (list): A list of query strings.
+        logger (callable, optional): Logger used to report a skipped pass.
+    Returns:
+        humanized_queries (list): Queries, some with a simulated typo;
+        unchanged if nlpaug is unavailable.
     """
     try:
         import nlpaug.augmenter.char as nac  # type: ignore
-    except Exception:
-        return None
+    except Exception as e:  # ImportError, or a partially installed nlpaug
+        msg = (
+            f"[WARNING] Skipping query humanizing — nlpaug unavailable "
+            f"({e.__class__.__name__}: {e}). Searching queries as-is."
+        )
+        (logger or print)(msg)
+        return list(queries)
 
     try:
-        return nac.KeyboardAug(
+        mod = nac.KeyboardAug(
             # 100% probability because the 20% overall chance
             # handled outside by the `random` module
             aug_char_p=1.0,
@@ -50,36 +57,11 @@ def _build_keyboard_augmenter():
             include_special_char=False,
             include_numeric=True,
         )
-    except Exception:
-        return None
-
-
-def humanize_queries(queries, logger=None):
-    """
-    Substitute character by keyboard distance to simulate human typing errors.
-
-    This sits on the static-query fallback, which is exactly the path taken when
-    LLM query generation fails — so it must never raise. A missing typo engine
-    degrades to the queries as they are: the run still collects its searches.
-
-    Args:
-        queries (list): A list of query strings.
-        logger (callable, optional): Logger used to report a skipped pass.
-    Returns:
-        humanized_queries (list): Modified query strings with simulated typing
-        errors, or the queries unchanged when nlpaug is unavailable.
-    """
-    mod = _build_keyboard_augmenter()
-
-    if mod is None:
-        message = (
-            "[WARNING] Skipping query humanizing — the nlpaug typo engine is "
-            "unavailable. Searching the queries as-is."
+    except Exception as e:  # e.g. its bundled data file is unreadable
+        (logger or print)(
+            f"[WARNING] Skipping query humanizing — KeyboardAug unavailable "
+            f"({e.__class__.__name__}: {e}). Searching queries as-is."
         )
-        if logger:
-            logger(message)
-        else:
-            print(message)
         return list(queries)
 
     humanized_queries = []
@@ -88,15 +70,18 @@ def humanize_queries(queries, logger=None):
         if random.random() < 0.2:
             try:
                 modified_query = mod.augment(query)
-                typo_query = (
-                    modified_query[0]
-                    if isinstance(modified_query, list)
-                    else modified_query
+            except Exception as e:
+                (logger or print)(
+                    f"[WARNING] Could not humanize a query "
+                    f"({e.__class__.__name__}: {e}); using it unchanged."
                 )
-            except Exception:
-                # A per-query augment failure is not worth losing the query.
                 humanized_queries.append(query)
                 continue
+            typo_query = (
+                modified_query[0]
+                if isinstance(modified_query, list)
+                else modified_query
+            )
             humanized_queries.append(typo_query)
         else:
             humanized_queries.append(query)

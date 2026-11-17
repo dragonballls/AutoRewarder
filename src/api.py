@@ -162,6 +162,9 @@ class AutoRewarderAPI:
         self._query_plan = []
         self._run_queries = set()
         self._run_planned_total = 0
+        # Runtime override for the "daily_first" setting; None = use the saved
+        # value, True/False = force it for this process only.
+        self.daily_first = None
         # Last balance-scrape diagnostic ({value, via, candidates, url, title}),
         # surfaced to the dashboard so a failed read can be debugged in place.
         self._last_balance_debug = {}
@@ -661,6 +664,25 @@ class AutoRewarderAPI:
         self.log(
             f"Force daily tasks: {'ON' if force_daily_tasks else 'OFF'} — "
             f"Force visual search: {'ON' if force_visual_search else 'OFF'}"
+        )
+        return True
+
+    def get_daily_first(self):
+        """Return whether the Daily Set runs before this phase's searches."""
+        if self.daily_first is not None:
+            return bool(self.daily_first)
+        return bool(self.global_settings.get_daily_first())
+
+    def set_daily_first(self, enabled):
+        """
+        Persist whether the Daily Set runs before the search queries.
+
+        Returns:
+            bool: True once the setting is saved.
+        """
+        self.global_settings.set_daily_first(enabled)
+        self.log(
+            f"Daily Set order: {'before searches' if enabled else 'after searches'}"
         )
         return True
 
@@ -2507,7 +2529,8 @@ class AutoRewarderAPI:
         Run the bot against the currently-selected account.
 
         Default mode (daily_only=False): runs sequentially
-          1. PC phase     — desktop UA, `pc_count` Bing searches, then Daily Set.
+          1. PC phase     — desktop UA, `pc_count` Bing searches and the Daily
+                            Set (in the order the "daily_first" setting picks).
           2. Mobile phase — iPhone UA, `mobile_count` Bing searches only.
         Either count may be 0 to skip that phase.
 
@@ -3459,10 +3482,12 @@ class AutoRewarderAPI:
         points (Daily Set, Read to Earn, Explore, check-in, Visual Search)
         instead of skipping them along with the PC searches.
 
+        The Daily Set runs after the searches unless "daily_first" is set.
+
         Args:
             mobile (bool): whether this is the Mobile phase (True) or PC phase (False)
             count (int): how many searches to perform in this phase
-            do_daily_set (bool): whether to run the Daily Set after searches (PC phase only)
+            do_daily_set (bool): whether this phase may run the Daily Set (PC phase only)
         """
         label = "Mobile" if mobile else "PC"
         if count > 0:
@@ -3487,7 +3512,7 @@ class AutoRewarderAPI:
 
         self._driver = self.driver_manager.setup_driver(mobile=mobile)
         try:
-            # The daily tasks run after the searches, so check the session now
+            # The daily tasks may run in this phase, so check the session now
             # rather than after twenty minutes of searching a signed-out profile.
             if do_daily_set:
                 try:
@@ -3497,8 +3522,13 @@ class AutoRewarderAPI:
                 if not self._ensure_signed_in(self._driver):
                     return
 
-            done = 0
-            if queries_to_search:
+            ran_daily_set = False
+
+            def run_searches_block():
+                """Do this phase's searches and tally the ones that landed."""
+                if self._stop_event.is_set() or not queries_to_search:
+                    # A task-only pass (count=0) has no queries by design.
+                    return
                 done = self.search_engine.perform_searches(
                     self._driver,
                     queries_to_search,
@@ -3510,25 +3540,36 @@ class AutoRewarderAPI:
                 bucket = "mobile" if mobile else "pc"
                 self._session_counts[bucket] += int(done or 0)
 
-            ran_daily_set = False
+            def run_daily_set_block():
+                """Run the Daily Set if this phase may and it is still due."""
+                nonlocal ran_daily_set
+                if not do_daily_set or self.daily_set is None:
+                    return
 
-            # Only the PC phase runs the Daily Set, and a day already marked as
-            # done is skipped unless "Force daily tasks" is on.
-            daily_done = False
-            force_daily = False
-            if do_daily_set and self.daily_set is not None:
                 daily_done = not self.daily_set.should_perform_daily_set()
                 force_daily = (
                     not self._daily_set_attempted
                     and self.global_settings.get_force_tasks()["force_daily_tasks"]
                 )
 
-            if (
-                do_daily_set
-                and self.daily_set is not None
-                and not self._stop_event.is_set()
-                and (not daily_done or force_daily)
-            ):
+                if daily_done and not force_daily:
+                    if not self._stop_event.is_set():
+                        self.log(
+                            "Daily Set already completed today. Skipping. "
+                            "(Enable 'Force daily tasks' in Settings to run it "
+                            "anyway.)"
+                        )
+                        # Read to Earn, Explore and the daily check-in are not
+                        # covered by the Daily Set marker, so they still get a
+                        # pass on a day whose cards are already done.
+                        human = HumanBehavior(
+                            self._driver, show_cursor=True, mobile=mobile
+                        )
+                        self._run_earn_activities(human)
+                    return
+                if self._stop_event.is_set():
+                    return
+
                 if daily_done:
                     self.log(
                         "Daily Set already marked as done today, but running "
@@ -3560,30 +3601,30 @@ class AutoRewarderAPI:
                     else:
                         self.log("Daily Set failed. Not marked as done for today.")
 
-                # Read to Earn, Explore on Bing and the daily check-in, which
-                # need more than a click. Run beside the Daily Set whether or not
-                # it fully succeeded: they are separate points.
+                # Read to Earn, Explore on Bing and the daily check-in need
+                # more than a click. Run beside the Daily Set whether or not it
+                # fully succeeded: they are separate points.
                 if not self._stop_event.is_set():
                     self._run_earn_activities(human)
 
-            elif daily_done and not self._stop_event.is_set():
-                self.log(
-                    "Daily Set already completed today. Skipping. "
-                    "(Enable 'Force daily tasks' in Settings to run it anyway.)"
-                )
-                # Not covered by the Daily Set marker, so still worth a pass.
-                human = HumanBehavior(self._driver, show_cursor=True, mobile=mobile)
-                self._run_earn_activities(human)
+            # Daily-first banks the fixed points before the long search phase.
+            daily_first = do_daily_set and self.get_daily_first()
+            if daily_first:
+                run_daily_set_block()
+                run_searches_block()
+            else:
+                run_searches_block()
+                run_daily_set_block()
 
             # Visual search runs only in PC phase,
             # do_daily_set=False in Mobile phase.
             if do_daily_set and not self._stop_event.is_set():
                 self._run_visual_search_if_needed()
 
-            # When the Daily Set didn't run (mobile phase, or already done
-            # today) the rewards counter on the current Bing SERP is still a
-            # usable fallback source for the balance.
-            if not ran_daily_set and not self._stop_event.is_set():
+            # Scrape the balance from the current page when the Daily Set did not
+            # already do it: mobile phase, an already-done day, or a daily-first
+            # run whose only scrape predates these searches.
+            if (not ran_daily_set or daily_first) and not self._stop_event.is_set():
                 self._try_scrape_balance()
 
         finally:

@@ -82,7 +82,11 @@ class MobileOnlyDesktopTaskPassTests(unittest.TestCase):
 
     def test_the_task_only_pass_keeps_every_desktop_task(self):
         phase = _method("_run_phase")
-        ordered = _positions(
+        # All three must still be driven. Their relative order follows the
+        # daily_first setting (the Daily Set may run before or after the
+        # searches), but the earn-page tasks always follow the Daily Set and
+        # Visual Search always comes last.
+        _positions(
             phase,
             [
                 "self.daily_set.perform_daily_set(",
@@ -90,7 +94,31 @@ class MobileOnlyDesktopTaskPassTests(unittest.TestCase):
                 "self._run_visual_search_if_needed()",
             ],
         )
-        self.assertEqual(ordered, sorted(ordered))
+        # One call sits in the "already done today" branch, which runs before
+        # the cards; the other follows the Daily Set it just ran.
+        earn_calls = [
+            i
+            for i in range(len(phase))
+            if phase.startswith("self._run_earn_activities(human)", i)
+        ]
+        self.assertGreaterEqual(len(earn_calls), 2)
+        self.assertLess(
+            phase.index("self.daily_set.perform_daily_set("),
+            earn_calls[-1],
+            "the earn-page tasks belong beside the Daily Set it just ran",
+        )
+        self.assertLess(
+            earn_calls[-1],
+            phase.index("self._run_visual_search_if_needed()"),
+            "Visual Search is the last dashboard task",
+        )
+
+    def test_a_task_only_pass_never_calls_perform_searches_with_no_queries(self):
+        phase = _method("_run_phase")
+        start = phase.index("def run_searches_block")
+        block = phase[start:]
+        head = block[: block.index("perform_searches")]
+        self.assertIn("not queries_to_search", head)
 
     def test_the_earn_pass_still_covers_read_explore_and_check_in(self):
         # The three earn-page tasks are owned by the runner, reached through

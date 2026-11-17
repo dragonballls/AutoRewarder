@@ -220,7 +220,8 @@ class NoTypoEngineTests(unittest.TestCase):
         from importlib.metadata import PackageNotFoundError
 
         queries = ["banana bread"]
-        with mock.patch("builtins.__import__", side_effect=PackageNotFoundError):
+        missing = PackageNotFoundError("nlpaug")
+        with mock.patch("builtins.__import__", side_effect=missing):
             self.assertEqual(humanize_queries(queries), queries)
 
 

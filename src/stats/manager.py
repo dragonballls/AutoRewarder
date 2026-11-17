@@ -455,9 +455,12 @@ class StatsManager:
         if balance is not None:
             prior = stats["balance"]["current"]
             if isinstance(prior, int):
+                # The raw movement is always recorded, so a redemption stays
+                # visible as a spend. A decrease is never reported as negative
+                # earnings: points_delta stays None and the caller falls back to
+                # the activity estimate for that run.
                 balance_change = balance - prior
-                if balance_change >= 0:
-                    points_delta = balance_change
+                points_delta = balance_change if balance_change >= 0 else None
             stats["balance"]["previous"] = prior
             stats["balance"]["current"] = balance
             stats["balance"]["updated_at"] = now_iso
