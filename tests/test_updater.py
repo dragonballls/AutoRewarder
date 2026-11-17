@@ -76,6 +76,18 @@ class UpdaterTargetTests(unittest.TestCase):
             f"{config.CURRENT_VERSION} must be newer than upstream v4.4",
         )
 
+    def test_this_release_is_newer_than_the_version_people_are_running(self):
+        """
+        The updater compares the running build against the release tag. Shipping
+        real changes under the same tag as the release people already have means
+        auto-update never offers them, so the version must move with the work.
+        """
+        self.assertTrue(
+            _version_tuple(config.CURRENT_VERSION) > _version_tuple("v4.5"),
+            f"{config.CURRENT_VERSION} must be newer than the v4.5 builds, or "
+            "nobody with auto-update receives this fix",
+        )
+
 
 class CheckForUpdatesTests(unittest.TestCase):
     def _response(self, status=200, tag=None):

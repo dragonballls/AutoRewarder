@@ -38,6 +38,7 @@ from .accounts import (
     GlobalSettingsManager,
 )
 from .emulator import DriverManager, HumanBehavior, edge_policy
+from .emulator.driver import _is_closed_session
 from .search import HistoryManager, SearchEngine, llm, resolve_search_locale
 from .dailytasks import DailySet, EarnActivities
 from .stats import (
@@ -1862,6 +1863,51 @@ class AutoRewarderAPI:
 
         return ok
 
+    def _verify_signed_in(self):
+        """
+        Ask Rewards whether this account's profile is signed in.
+
+        Used to confirm a sign-in rather than assume it: First Setup used to
+        report success as soon as the browser window closed, so an abandoned or
+        failed sign-in looked identical to a good one and every later task then
+        silently earned nothing.
+
+        The check opens a short-lived headless browser on the same profile and
+        reads the flyout's offer list — signed out, it renders anonymously and
+        says so; signed in, it carries the account's own offer list and balance.
+
+        Returns:
+            bool | None: True signed in, False signed out, None when it could not
+                be determined (offline, browser failed, page unreadable). None is
+                not a failure: it must not block a setup that may be fine.
+        """
+        if self.driver_manager is None:
+            return None
+
+        driver = None
+        try:
+            driver = self.driver_manager.setup_driver(headless=True, mobile=False)
+            from .dailytasks.rewards_api import RewardsApiEarner
+
+            earner = RewardsApiEarner(driver, logger=self.log)
+            state = earner.session_state(navigate=True)
+            if state == "signed_in":
+                return True
+            if state == "signed_out":
+                return False
+            return None
+        except Exception as e:
+            self.log(
+                f"[INFO] Could not check the sign-in: {str(e).splitlines()[0][:120]}"
+            )
+            return None
+        finally:
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+
     # ------------------------------------------------------------------
     # First setup flow (scoped to the currently-active account)
     # ------------------------------------------------------------------
@@ -1964,18 +2010,24 @@ class AutoRewarderAPI:
   (top-right on Bing) and choose 'Sign in with a different account'.
 - Close the browser when you're done.""")
 
-            while len(setup_driver.window_handles) > 0:
+            # Wait for the person to close the window. `window_handles` raises
+            # once the browser is gone, which is the normal end of this loop and
+            # not an error — but it is also not proof that anyone signed in.
+            while True:
+                try:
+                    if len(setup_driver.window_handles) == 0:
+                        break
+                except Exception:
+                    break
                 time.sleep(1)
 
             setup_succeeded = True
 
         except Exception as e:
             error_msg = str(e).lower()
-            if (
-                "target window already closed" in error_msg
-                or "disconnected" in error_msg
-                or "not reachable" in error_msg
-            ):
+            if _is_closed_session(error_msg):
+                # The session died with the window: the person is finished. Not
+                # an error — and not evidence of a sign-in either.
                 setup_succeeded = True
             else:
                 self.log(f"[ERROR] Error during setup: {e}")
@@ -1993,6 +2045,24 @@ class AutoRewarderAPI:
             # Always restore the Edge policy to its previous state.
             if policy_applied:
                 edge_policy.restore_value(previous_policy)
+
+            if setup_succeeded:
+                # "Setup completed" used to mean only "the window closed", which
+                # is how four accounts could be set up one after another and then
+                # earn nothing. Ask Rewards who it thinks this is.
+                signed_in = self._verify_signed_in()
+                if signed_in is False:
+                    self.log(
+                        "[WARNING] The browser closed, but Rewards still reports "
+                        f"'{label}' as signed out. Open First Setup again and let "
+                        "the sign-in finish before closing the window."
+                    )
+                    setup_succeeded = False
+                elif signed_in is None:
+                    self.log(
+                        "[INFO] Could not confirm the sign-in (Rewards did not "
+                        "answer). Run a task to check it."
+                    )
 
             if setup_succeeded:
                 self.log(
@@ -2152,13 +2222,57 @@ class AutoRewarderAPI:
         except Exception:
             pass
 
+        try:
+            driver.set_page_load_timeout(30)
+        except Exception:
+            pass
+
+        attempts = max(1, attempts)
+        self._last_balance_debug = {}
+
+        # Primary: the offer list. The flyout carries `userStatus.availablePoints`
+        # in its payload, so the number is there even when no DOM node rendered —
+        # and a signed-out session answers with an explicit zero plus
+        # `isRewardsUser: false` instead of a sign-in page, which is what made the
+        # DOM scrape report "Balance not found" with a login URL.
+        try:
+            from .dailytasks.rewards_api import RewardsApiEarner, available_points
+
+            earner = RewardsApiEarner(driver, logger=None)
+            for _ in range(attempts):
+                view_model = earner.load(navigate=True)
+                if view_model is not None:
+                    value = available_points(view_model)
+                    if isinstance(value, int) and value >= 0:
+                        self._last_balance_debug = {
+                            "value": value,
+                            "via": "offer-list:userStatus.availablePoints",
+                            "candidates": [],
+                            "url": "bing.com/rewards/panelflyout",
+                            "title": "Rewards offer list",
+                        }
+                        return value
+                time.sleep(1.5)
+            self._last_balance_debug = {
+                "value": None,
+                "via": None,
+                "candidates": [],
+                "url": "bing.com/rewards/panelflyout",
+                "title": "Rewards offer list",
+                "error": getattr(earner, "last_state", None),
+            }
+        except Exception as e:
+            self._last_balance_debug = {
+                "value": None,
+                "via": None,
+                "candidates": [],
+                "error": str(e)[:120],
+            }
+
         # Try the dashboard root first (legacy dashboard + the new dashboard when
         # migrated accounts are redirected there), then the explicit /dashboard
         # path used by the new Next.js app in case the root doesn't render it.
         urls = ["https://rewards.bing.com", "https://rewards.bing.com/dashboard"]
-
-        attempts = max(1, attempts)
-        self._last_balance_debug = {}
 
         for url in urls:
             try:
@@ -2182,7 +2296,7 @@ class AutoRewarderAPI:
                     return value
                 time.sleep(1.5)
 
-        # Not found on any URL. Surface the diagnostic to the activity feed so a
+        # Not found anywhere. Surface the diagnostic to the activity feed so a
         # failure can be debugged from the logs (which page did we land on, what
         # did the selectors match), then also keep it in _last_balance_debug for
         # the dashboard's on-demand refresh diagnostic.
@@ -2829,7 +2943,15 @@ class AutoRewarderAPI:
                 if driver
                 else None
             )
-            earn = EarnActivities(logger=self.log)
+            # The report-based earner is what makes these three verifiable: hand
+            # it to the pass, or the test would report "the card did not confirm
+            # credit" for work that Rewards would happily have paid for.
+            earner = None
+            if driver is not None:
+                from .dailytasks.rewards_api import RewardsApiEarner
+
+                earner = RewardsApiEarner(driver, logger=self.log)
+            earn = EarnActivities(logger=self.log, earner=earner)
 
             result = tester.run(
                 canonical,
@@ -2909,6 +3031,12 @@ class AutoRewarderAPI:
         driver is currently on. Only updates `_last_scraped_balance` on a
         successful read, so a later SERP miss never clobbers a good value
         scraped earlier from the rewards dashboard.
+
+        The page's own counter is tried first because it is cheap and needs no
+        navigation (a Bing results page carries one). The offer list is the
+        fallback, and it is the one that works on the dashboard: its payload
+        carries `availablePoints` whether or not the balance card mounted, which
+        is what kept the DOM scrape reporting "not found" on a signed-in page.
         """
         if self._driver is None:
             return
@@ -2916,6 +3044,18 @@ class AutoRewarderAPI:
             value = scrape_points_balance(self._driver, self.log)
         except Exception:
             value = None
+
+        if value is None:
+            try:
+                from .dailytasks.rewards_api import RewardsApiEarner, available_points
+
+                earner = RewardsApiEarner(self._driver, logger=None)
+                view_model = earner.load(navigate=True, quiet=True)
+                if view_model is not None:
+                    value = available_points(view_model)
+            except Exception:
+                value = None
+
         if value is not None:
             self._last_scraped_balance = value
 
@@ -2983,6 +3123,11 @@ class AutoRewarderAPI:
         looking in the wrong place. One check here turns ten misleading warnings
         into one accurate message.
 
+        Two signals, because the first one alone is not enough. A redirect to a
+        sign-in host is definitive, but a profile whose Microsoft session simply
+        expired can render the dashboard anonymously — with cards absent and no
+        redirect at all — which is the state four accounts in a row were left in.
+
         Returns:
             bool: True when the session looks usable, or when the check itself is
             inconclusive (a page that can't be read must not block a run).
@@ -3002,14 +3147,34 @@ class AutoRewarderAPI:
             "login.microsoftonline.com",
             "account.microsoft.com",
         )
-        if not any(host in url for host in sign_in_hosts):
-            return True
+        redirected = any(host in url for host in sign_in_hosts)
+
+        if not redirected:
+            # A page that loaded and says it is not signed in is not usable
+            # either. Only a definite "anonymous" answer counts here: an offer
+            # list that cannot be read proves nothing, and blocking a run on it
+            # would refuse to work whenever Rewards is mid-update.
+            try:
+                from .dailytasks.rewards_api import RewardsApiEarner
+
+                state = RewardsApiEarner(driver, logger=self.log).session_state(
+                    navigate=False
+                )
+                if state != "signed_out":
+                    return True
+            except Exception:
+                return True
 
         self.log(
-            "[ERROR] The browser was sent to a sign-in page, so this account is "
-            "signed out. Nothing below can earn points until it is signed in again: "
-            "open the account's browser with First Setup, sign in to Microsoft, "
-            "and close the window."
+            "[ERROR] "
+            + (
+                "The browser was sent to a sign-in page"
+                if redirected
+                else "Rewards reports this profile as not signed in"
+            )
+            + ", so this account is signed out. Nothing below can earn points "
+            "until it is signed in again: open the account's browser with First "
+            "Setup, sign in to Microsoft, and close the window."
         )
         return False
 
@@ -3066,6 +3231,11 @@ class AutoRewarderAPI:
                 # on the rewards dashboard, before any Stop check returns early.
                 totals = self.daily_set.last_totals
                 self._session_counts["cards"] += totals.get("newly", 0)
+                # Offers Rewards confirmed on the earn page and in punchcards.
+                # These are verified, so they count as completed cards as well;
+                # `earn`/`quests` stay what they always were (opens).
+                self._session_counts["cards"] += totals.get("more_verified", 0)
+                self._session_counts["cards"] += totals.get("quests_verified", 0)
                 self._session_counts["earn"] += totals.get("earn", 0)
                 self._session_counts["quests"] += totals.get("quests", 0)
                 self._try_scrape_balance()
@@ -3572,6 +3742,11 @@ class AutoRewarderAPI:
                 # dashboard, before the Stop check can short-circuit.
                 totals = self.daily_set.last_totals
                 self._session_counts["cards"] += totals.get("newly", 0)
+                # Offers Rewards confirmed on the earn page and in punchcards.
+                # These are verified, so they count as completed cards as well;
+                # `earn`/`quests` stay what they always were (opens).
+                self._session_counts["cards"] += totals.get("more_verified", 0)
+                self._session_counts["cards"] += totals.get("quests_verified", 0)
                 self._session_counts["earn"] += totals.get("earn", 0)
                 self._session_counts["quests"] += totals.get("quests", 0)
                 self._try_scrape_balance()

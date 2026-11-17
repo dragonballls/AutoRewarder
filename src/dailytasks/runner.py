@@ -109,6 +109,13 @@ class DailySet:
             "explore": 0,
             "check_in": 0,
         }
+        # Offers Rewards' own data confirmed, across every surface of the last
+        # new-dashboard run. The test sheet reports this instead of implying
+        # that an opened card earned anything.
+        self.last_reported = {"verified": 0, "attempted": 0, "reports": 0}
+        # "report" when those counts came from Rewards' activity API (the
+        # verified path), "page" when they came from the page-card fallback.
+        self.last_earn_source = "none"
 
     def _log(self, message):
         if self.logger:
@@ -579,6 +586,7 @@ class DailySet:
             # Surface the new-dashboard run's counts for the stats layer so
             # per-account statistics stay accurate on migrated accounts.
             self.last_totals = dict(handler.last_totals)
+            self.last_reported = dict(getattr(handler, "last_reported", {}) or {})
             if handler.visual_search_url:
                 self.visual_search_url = handler.visual_search_url
             self.visual_search_progress = handler.visual_search_progress
@@ -592,10 +600,8 @@ class DailySet:
         Read to Earn, Explore on Bing and the daily check-in.
 
         These live beside the Daily Set on the same earn page but cannot be
-        credited by clicking a card and moving on — reading needs time on the
-        article, Explore needs its topics opened, and the check-in must be
-        claimed once a day. `EarnActivities` drives each of them and re-reads the
-        page to verify, so nothing here is reported as done on a click alone.
+        credited by clicking a card and moving on. They are reported through
+        Rewards' activity API, and counted only when Rewards' own data moves.
 
         Returns:
             dict: verified counts — {read, explore, check_in} — so the caller
@@ -607,8 +613,10 @@ class DailySet:
             return {"read": 0, "explore": 0, "check_in": 0}
 
         from .earn_activities import EarnActivities
+        from .rewards_api import RewardsApiEarner
 
-        activities = EarnActivities(logger=self.logger)
+        earner = RewardsApiEarner(driver, logger=self.logger)
+        activities = EarnActivities(logger=self.logger, earner=earner)
         try:
             totals = activities.run(driver, human, stop_event=stop_event)
         except Exception as e:
@@ -618,6 +626,7 @@ class DailySet:
             return {"read": 0, "explore": 0, "check_in": 0}
 
         self.last_earn_totals = totals
+        self.last_earn_source = getattr(activities, "last_source", "none")
         return totals
 
     def read_visual_search_progress(self, driver):

@@ -93,10 +93,18 @@ class EveryEarningOptionIsDrivenTests(unittest.TestCase):
         Read/Explore cards live in the same section as the ordinary cards. The
         generic pass must skip them, or they would be opened for a few seconds
         (earning nothing) and counted as done before the real pass runs.
+
+        Both paths are checked: the report path skips them by kind, and the
+        click path skips them by the same classifier.
         """
-        more = _methods("NewDashboardDailySet", "src/dailytasks/new_dashboard.py")[
-            "_run_more_activities"
-        ]
+        methods = _methods("NewDashboardDailySet", "src/dailytasks/new_dashboard.py")
+        report = methods["_run_more_activities_by_report"]
+        self.assertIn("_more_activity_offers", report)
+        selection = methods["_more_activity_offers"]
+        self.assertIn("offer_earn_kind", selection)
+        self.assertIn("is_reportable", selection)
+
+        more = methods["_run_more_activities_by_click"]
         self.assertIn("classify_earn_kind", more)
         # ast.unparse normalises quotes, so the tuple reads with either style.
         self.assertIn("read", more)

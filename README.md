@@ -172,7 +172,7 @@ See the [Development Setup](#development-setup-for-developers) section.
 - Optional tab switching between result categories (Images/Videos/News)
 - Natural mouse movement/clicking (W3C Actions/randomized Bezier trajectories)
 - Daily Set task collection (runs once per day, per account)
-- Read to Earn, Explore on Bing and the daily check-in, driven to completion and verified against each card's own progress
+- Read to Earn, Explore on Bing and the daily check-in, earned through the same activity report the Rewards page uses and confirmed against each offer's own progress
 - Separate browser profile per account
 - Localization detection (language, region)
 - Simulated human typos in search queries (via nlpaug)

@@ -154,13 +154,18 @@ class _FakePage:
             ]
         if "bing.com/search" in script and "seen[href]" in script:
             return [{"href": href, "title": t} for href, t in self.topics]
-        # The probe is the only script that looks for the brand CTA; the state
-        # read is the only one that returns a done flag. Keying on those keeps
-        # the fake from confusing the two, which share the word "check".
-        if "bgCtrlBrand" in script:
+        # The probe is the only script that looks for the check-in control; the
+        # state read is the only one that returns a done flag. Keying on those
+        # keeps the fake from confusing the two, which share the word "check".
+        if "card_text" in script:
             if not self.check_in_offered or self.check_in_done:
                 return None
-            return {"control": "CHECKIN", "via": "label", "card": "Daily check-in"}
+            return {
+                "control": "CHECKIN",
+                "via": "label",
+                "card": "Daily check-in",
+                "card_text": "Daily check-in",
+            }
         if "done: !!" in script:
             if not self.check_in_offered:
                 return None

@@ -21,10 +21,23 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
-from .earn_activities import classify_earn_kind
+from .earn_activities import classify_earn_kind, offer_earn_kind
+from .rewards_api import (
+    RewardsApiEarner,
+    count_verified,
+    is_reportable,
+    todays_offers,
+)
 
 DASHBOARD_URL = "https://rewards.bing.com/dashboard"
 EARN_URL = "https://rewards.bing.com/earn"
+
+# Which view-model group each earning surface owns. The daily set is its own
+# group, quests are punchcards, and everything else that awards browsing points
+# is a "more activity". Splitting by group is what keeps two passes from
+# reporting the same offer twice and counting it twice.
+DAILY_SET_SOURCE = "dailySetPromotions"
+QUEST_SOURCE = "punchCards"
 
 # Concatenate every streamed RSC chunk (`window.__next_f` is a list of
 # `[1, "<chunk>"]` entries) and pull out each `dailySetItems` array, returning
@@ -351,6 +364,10 @@ def _verified_daily_set_counts(before_items, after_items):
     A complete post-run snapshot must contain every original activity under a
     stable offerId/hash/destination identity. Missing or unidentified records
     are not treated as completed.
+
+    Both snapshots here are the dashboard's own `dailySetItems` records, which
+    key on `offerId` the same way the offer list does, so this is the offer-list
+    comparison with the same identity rules.
     """
     if not isinstance(before_items, list) or not before_items:
         return None
@@ -417,6 +434,10 @@ class NewDashboardDailySet:
             "earn": 0,
             "quests": 0,
         }
+        # Report-based earning: {verified, attempted, reports}. Kept beside
+        # last_totals because it answers a different question — how many offers
+        # Rewards' own data confirmed, across every surface this run touched.
+        self.last_reported = {"verified": 0, "attempted": 0, "reports": 0}
         # Entry URL of the "visual search streak" mission, read off the
         # dashboard during `perform` so the visual search can start from the
         # link that credits it. None when the mission isn't offered.
@@ -794,12 +815,32 @@ class NewDashboardDailySet:
 
     def perform(self, driver, human, stop_event=None):
         """
-        Run the new-dashboard point-earning tasks: the Daily Set (/dashboard),
-        claiming pending points, then the "earn-page" activities and the quests
-        (/earn). Returns the Daily Set outcome (used to mark today done); the
-        claim/earn/quest passes are best-effort.
+        Run the new-dashboard point-earning tasks: the Daily Set, claiming
+        pending points, the "earn-page" activities and the quests.
+
+        Each pass asks Rewards what it still owes and reports the work through
+        the activity API, then re-reads the answer to decide whether anything
+        was credited. When the offer list cannot be read at all (a page mid-
+        update, an unexpected sign-out), the pass falls back to the page's own
+        cards, so a changed site degrades instead of earning nothing silently.
+
+        Returns the Daily Set outcome (used to mark today done); the claim/earn/
+        quest passes are best-effort.
         """
+        self.last_reported = {"verified": 0, "attempted": 0, "reports": 0}
+
         daily_ok = self._run_daily_set(driver, human, stop_event=stop_event)
+        # The daily-set pass leaves the browser on the offer list. The streak
+        # mission is read from the dashboard itself, so go back there first —
+        # reading it from whatever page the last pass ended on is how the streak
+        # URL silently came back empty.
+        try:
+            driver.get(DASHBOARD_URL)
+            self._wait_ready(driver)
+            time.sleep(random.uniform(1.0, 2.0))
+        except Exception:
+            pass
+
         self.visual_search_url = self._find_visual_search_url(driver)
         self.visual_search_progress = self.read_visual_search_progress(
             driver, navigate=False
@@ -826,6 +867,38 @@ class NewDashboardDailySet:
             if not (stop_event is not None and stop_event.is_set()):
                 self._log(f"[WARNING] Quest pass failed: {e}")
         return daily_ok
+
+    # -- Report-based earning --------------------------------------------------
+
+    def _earner(self, driver):
+        """The one earner for this driver, created on first use."""
+        earner = getattr(self, "_earner_instance", None)
+        if earner is None or earner.driver is not driver:
+            earner = RewardsApiEarner(driver, logger=self.logger)
+            self._earner_instance = earner
+        return earner
+
+    def _load_offers(self, driver):
+        """
+        Rewards' own offer list, or None when it cannot be read.
+
+        This is the single source the report passes work from: one read tells us
+        every offer, its hash, its progress and whether it is already done.
+        """
+        return (
+            self._earner(driver).load(navigate=True) and self._earner(driver).offers()
+        )
+
+    def _record_reported(self, result):
+        """Fold one report pass into the run's reported totals."""
+        for key in ("verified", "attempted", "reports"):
+            self.last_reported[key] += int(result.get(key, 0) or 0)
+
+    @staticmethod
+    def _count(n, singular, plural=None):
+        """`1 offer` / `2 offers`, so the log reads as prose."""
+        label = singular if n == 1 else (plural or singular + "s")
+        return f"{n} {label}"
 
     def _find_visual_search_url(self, driver):
         """
@@ -1024,10 +1097,80 @@ class NewDashboardDailySet:
 
     def _run_more_activities(self, driver, human, stop_event=None):
         """
-        Click the incomplete point-earning cards in the /earn "earn-page"
-        section (#moreactivities). Mirrors the legacy "More Activities" section.
+        Earn the "More Activities" cards on /earn.
+
+        These are ordinary point offers: each one is reportable through the
+        activity API, and the offer list says which are still open. The click
+        path below is kept for a site whose offer list cannot be read — it opens
+        cards, but it cannot tell whether anything credited, so its numbers are
+        only ever opens.
         """
         self._log("Checking 'earn-page' activities (new dashboard)")
+
+        offers = self._run_more_activities_by_report(driver, stop_event=stop_event)
+        if offers is not None:
+            return
+        self._run_more_activities_by_click(driver, human, stop_event=stop_event)
+
+    def _more_activity_offers(self, offers):
+        """
+        The offers that belong to the 'More Activities' surface.
+
+        Everything that awards browsing points and is not the Daily Set, a
+        punchcard, or one of the three earn-page activities. Read/Explore/
+        check-in are excluded because the earn-activities pass owns them and
+        reporting them twice would split the confirmation across two passes.
+        """
+        selected = []
+        for offer in offers:
+            source = offer.get("source")
+            if source in (DAILY_SET_SOURCE, QUEST_SOURCE):
+                continue
+            if offer_earn_kind(offer) is not None:
+                continue
+            if not is_reportable(offer):
+                continue
+            selected.append(offer)
+        return selected
+
+    def _run_more_activities_by_report(self, driver, stop_event=None):
+        """Report every open More Activities offer. Returns a result dict, or None."""
+        offers = self._load_offers(driver)
+        if not offers:
+            return None
+
+        pending = self._more_activity_offers(offers)
+        if not pending:
+            self._log("'earn-page': nothing to do.")
+            return {"attempted": 0, "verified": 0, "reports": 0, "skipped": 0}
+
+        self._log(
+            f"'earn-page': {self._count(len(pending), 'activity', 'activities')} to earn."
+        )
+        result = self._earner(driver).earn(pending, stop_event=stop_event)
+        self._record_reported(result)
+        # `earn` stays what it always was — opens — so the dashboard's history
+        # keeps two separate numbers; `newly` is verified completions only.
+        self.last_totals["earn"] = self.last_totals.get("earn", 0) + int(
+            result.get("attempted", 0) or 0
+        )
+        self.last_totals["attempted"] = self.last_totals.get("attempted", 0) + int(
+            result.get("attempted", 0) or 0
+        )
+        self.last_totals["more_verified"] = int(result.get("verified", 0) or 0)
+        verified = int(result.get("verified", 0) or 0)
+        self._log(
+            f"'earn-page': {self._count(verified, 'activity', 'activities')} credited."
+        )
+        return result
+
+    def _run_more_activities_by_click(self, driver, human, stop_event=None):
+        """
+        The page-card path: open each incomplete card and count the opens.
+
+        Kept for a site whose offer list cannot be read. Nothing here is
+        verified, so its count is reported as opens and never as earned points.
+        """
         try:
             driver.get(EARN_URL)
         except Exception as e:
@@ -1114,16 +1257,61 @@ class NewDashboardDailySet:
 
     def _run_quests(self, driver, human, stop_event=None):
         """
-        Complete the currently-actionable tasks inside /earn "quest" punchcards.
+        Earn the currently-open steps of /earn "quest" punchcards.
 
-        A quest is a multi-task card that links to its own /earn/quest/<id> page;
-        each task is a Bing-search link that must be really clicked to credit
-        (like a daily-set card). Punchcard tasks are time-gated — typically only
-        one unlocks per ~24h — so a run completes only what's unlocked right now;
-        locked tasks carry aria-disabled / data-disabled and are skipped. Full
-        completion of a quest therefore takes several daily runs.
+        A quest is a multi-task card; each step is its own offer with its own
+        hash, and only the step that is unlocked today can be reported. The
+        offer list carries them all — locked ones say so — so this reports the
+        open steps and confirms them from the same data. The click path below
+        stays for a site whose offer list cannot be read.
+
+        Full completion of a quest takes several daily runs, because Rewards
+        unlocks the steps on its own schedule.
         """
         self._log("Checking 'earn-page' quests (new dashboard)")
+
+        offers = self._run_quests_by_report(driver, stop_event=stop_event)
+        if offers is not None:
+            return
+        self._run_quests_by_click(driver, human, stop_event=stop_event)
+
+    def _run_quests_by_report(self, driver, stop_event=None):
+        """Report every open punchcard step. Returns a result dict, or None."""
+        offers = self._load_offers(driver)
+        if not offers:
+            return None
+
+        steps = [
+            offer
+            for offer in offers
+            if offer.get("source") == QUEST_SOURCE and is_reportable(offer)
+        ]
+        if not steps:
+            self._log("Quests: no open step to earn right now.")
+            return {"attempted": 0, "verified": 0, "reports": 0, "skipped": 0}
+
+        self._log(f"Quests: {self._count(len(steps), 'open step')} to earn.")
+        result = self._earner(driver).earn(steps, stop_event=stop_event)
+        self._record_reported(result)
+        self.last_totals["quests"] = self.last_totals.get("quests", 0) + int(
+            result.get("attempted", 0) or 0
+        )
+        self.last_totals["attempted"] = self.last_totals.get("attempted", 0) + int(
+            result.get("attempted", 0) or 0
+        )
+        self.last_totals["quests_verified"] = int(result.get("verified", 0) or 0)
+        self._log(
+            f"Quests: {self._count(int(result.get('verified', 0) or 0), 'step')} credited."
+        )
+        return result
+
+    def _run_quests_by_click(self, driver, human, stop_event=None):
+        """
+        The page-card path: open each open quest task and count the opens.
+
+        Kept for a site whose offer list cannot be read. Nothing here is
+        verified, so its count is reported as opens.
+        """
         try:
             driver.get(EARN_URL)
             self._wait_ready(driver)
@@ -1247,8 +1435,12 @@ class NewDashboardDailySet:
 
     def _run_daily_set(self, driver, human, stop_event=None):
         """
-        Open the new dashboard, visit each incomplete daily-set activity for
-        today, then re-read to confirm progress.
+        Earn today's Daily Set, then re-read Rewards' own data to confirm it.
+
+        The report pass is the path that actually credits: it asks the offer list
+        for today's three offers and reports each one, because a visit to the
+        card's destination is not what Rewards pays for. The page's cards remain
+        as a fallback for a site that cannot be read the new way.
 
         Args:
             driver: Selenium WebDriver instance.
@@ -1256,11 +1448,168 @@ class NewDashboardDailySet:
             stop_event (threading.Event, optional): When set, aborts cleanly.
 
         Returns:
-            bool: True if it's reasonable to mark today as done, False if we made
-                  no progress (so the next run can retry).
+            bool: True only when every one of today's offers is verified
+                  complete, False when any remain (so a later run retries).
         """
         self._log("Performing daily Rewards tasks (new dashboard)")
 
+        try:
+            offers = self._load_offers(driver)
+            if offers:
+                return self._run_daily_set_by_report(
+                    driver, human, offers, stop_event=stop_event
+                )
+            self._log(
+                "[INFO] Falling back to the dashboard's own cards for the Daily Set."
+            )
+            return self._run_daily_set_by_click(driver, human, stop_event=stop_event)
+        except Exception as e:
+            if stop_event is not None and stop_event.is_set():
+                self._log("New-dashboard daily set halted by Stop.")
+                return False
+            self._log(f"[ERROR] New-dashboard daily set failed: {e}")
+            return False
+
+    def _run_daily_set_by_report(self, driver, human, offers, stop_event=None):
+        """
+        Report today's Daily Set offers and confirm them from the same data.
+
+        Progress is read before and after from Rewards' offer list, so "done"
+        means the offers themselves say complete — not that a card was clicked.
+        """
+        todays = todays_offers(offers, DAILY_SET_SOURCE)
+        if not todays:
+            self._log(
+                "[INFO] The Daily Set is not in the offer list today — "
+                "nothing to do."
+            )
+            self.last_totals = {
+                "already": 0,
+                "newly": 0,
+                "final": 0,
+                "total": 0,
+                "attempted": 0,
+                "earn": 0,
+                "quests": 0,
+            }
+            return True
+
+        total = len(todays)
+        already = sum(1 for offer in todays if offer.get("complete"))
+        self.last_totals = {
+            "already": already,
+            "newly": 0,
+            "final": already,
+            "total": total,
+            "attempted": 0,
+            "earn": 0,
+            "quests": 0,
+        }
+        self._log(
+            f"New dashboard daily set: {already}/{total} already complete "
+            f"({total - already} to earn)."
+        )
+
+        incomplete = [offer for offer in todays if not offer.get("complete")]
+        if not incomplete:
+            return True
+
+        report = self._earner(driver).earn(incomplete, stop_event=stop_event)
+        self._record_reported(report)
+        self.last_totals["attempted"] = int(report.get("attempted", 0))
+        # Opening the card as well costs one visit per offer and is what the
+        # older dashboard versions credited; the report is what credits now, and
+        # a click after a report is harmless because the offer is already done.
+        if not stop_event or not stop_event.is_set():
+            self._visit_daily_cards(driver, human, offers, incomplete, stop_event)
+
+        if stop_event is not None and stop_event.is_set():
+            return False
+
+        # Re-read: the offers are the evidence, so ask for them again rather
+        # than trusting the report response (which says nothing about points).
+        self._earner(driver).refresh()
+        after = self._earner(driver).offers()
+        verified_counts = count_verified(todays, after)
+        if verified_counts is None:
+            self._log(
+                "[INFO] Post-run offer list incomplete — not confirming "
+                "completion this run."
+            )
+            return False
+
+        newly = verified_counts["newly"]
+        self.last_totals["total"] = verified_counts["total"]
+        self.last_totals["final"] = verified_counts["final"]
+        self.last_totals["newly"] = newly
+
+        if self.last_totals["final"] == self.last_totals["total"]:
+            self._log(
+                f"New dashboard daily set: all {self.last_totals['total']} "
+                f"activities verified complete (+{newly} this run)."
+            )
+            return True
+
+        remaining = self.last_totals["total"] - self.last_totals["final"]
+        self._log(
+            f"[WARNING] Daily Set remains incomplete: "
+            f"{self.last_totals['final']}/{self.last_totals['total']} "
+            f"verified complete ({remaining} remaining). "
+            "Not marking today done."
+        )
+        return False
+
+    def _visit_daily_cards(self, driver, human, offers, incomplete, stop_event=None):
+        """
+        Open each incomplete daily-set card, after the report.
+
+        Rewards has credited these by card visit on every dashboard version so
+        far, and the report path is newer than the cards are. Doing both costs a
+        few seconds and covers a market where only the visit is honoured.
+        """
+        by_id = {offer["offer_id"]: offer for offer in offers}
+        main_tab = None
+        try:
+            main_tab = driver.current_window_handle
+        except Exception:
+            return
+
+        try:
+            driver.get(DASHBOARD_URL)
+            self._wait_ready(driver)
+            time.sleep(random.uniform(1.0, 2.0))
+            self._expand_section(driver)
+        except Exception:
+            return
+
+        for offer in incomplete:
+            if stop_event is not None and stop_event.is_set():
+                return
+            if offer.get("complete"):
+                continue
+            destination = by_id.get(offer["offer_id"], {}).get("destination")
+            if not isinstance(destination, str) or not destination.startswith("http"):
+                continue
+            self._log(
+                f"Opening daily-set card: {offer.get('title') or offer['offer_id']}"
+            )
+            anchor = self._locate_anchor(driver, destination)
+            if anchor is not None:
+                self._click_anchor(driver, human, anchor, main_tab, stop_event)
+            else:
+                try:
+                    driver.get(destination)
+                    time.sleep(random.uniform(1.5, 3))
+                except Exception:
+                    continue
+
+    def _run_daily_set_by_click(self, driver, human, stop_event=None):
+        """
+        The page-card path: visit each incomplete card and measure the result.
+
+        Kept for a site whose offer list cannot be read. It only ever reports
+        completion the page itself confirms.
+        """
         try:
             driver.get(DASHBOARD_URL)
             self._wait_ready(driver)
@@ -1310,9 +1659,8 @@ class NewDashboardDailySet:
                 return True
 
             # Clicking the card (which opens its search in a new tab from the
-            # dashboard) is what credits the offer — a bare driver.get() to the
-            # destination does not. Expand the section, then click each incomplete
-            # card like a user would.
+            # dashboard) is what credits the offer on this path. Expand the
+            # section, then click each incomplete card like a user would.
             main_tab = driver.current_window_handle
             self._expand_section(driver)
 

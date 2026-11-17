@@ -256,6 +256,13 @@ class TaskTester:
         )
         if not totals.get("total"):
             result["notes"].append("No Daily Set cards were found on the page.")
+        # The offers the run reported, when it reported them: this is the number
+        # that came from Rewards rather than from a click.
+        reported = getattr(daily_set, "last_reported", None)
+        if isinstance(reported, dict) and reported.get("verified"):
+            result["notes"].append(
+                f"{reported['verified']} offer(s) confirmed credited by Rewards."
+            )
         return result
 
     def _run_claim(self, driver, human, daily_set, result, stop_event):
@@ -293,18 +300,29 @@ class TaskTester:
         opened = int(after.get("earn", 0)) - int(before.get("earn", 0))
         quests = int(after.get("quests", 0)) - int(before.get("quests", 0))
         count = quests if method == "_run_quests" else opened
+        verified = int(
+            (after.get("quests_verified", 0) - before.get("quests_verified", 0))
+            if method == "_run_quests"
+            else (after.get("more_verified", 0) - before.get("more_verified", 0))
+        )
 
         result["ok"] = True
-        # The generic earn pass opens cards; it does not re-verify credit.
-        result["verified"] = False
-        result["detail"] = (
-            f"{count} item(s) opened."
-            if count
-            else "Nothing pending was found for this task."
-        )
-        result["notes"].append(
-            "Cards are opened, not re-checked; Rewards confirms them on the next read."
-        )
+        # A report-confirmed offer is verified; an opened card is not. The two
+        # numbers are reported separately so "opened 3" can never be read as
+        # "earned 3".
+        result["verified"] = verified > 0
+        if verified:
+            result["detail"] = f"{verified} offer(s) verified credited."
+        elif count:
+            result["detail"] = f"{count} item(s) opened; nothing confirmed credited."
+        else:
+            result["detail"] = "Nothing pending was found for this task."
+
+        if not verified:
+            result["notes"].append(
+                "Rewards did not confirm credit. Check the run log for what it "
+                "answered."
+            )
         return result
 
     def _run_earn_activity(self, driver, human, earn, result, method, stop_event):
@@ -320,7 +338,9 @@ class TaskTester:
         count = getattr(earn, method)(driver, human, stop_event=stop_event)
 
         result["ok"] = True
-        # These passes only count a card when its own progress moved.
+        # These passes count a card only when Rewards' own data moved, so a
+        # count here is a verified one — from either the report path or the
+        # page fallback, both of which read the card's state back.
         result["verified"] = bool(count)
         result["detail"] = (
             f"{count} card(s) verified complete."
@@ -328,9 +348,10 @@ class TaskTester:
             else "The card did not confirm credit."
         )
         if not count:
+            source = getattr(earn, "last_source", "none")
             result["notes"].append(
-                "Either nothing was pending, or the card did not advance — "
-                "the log above says which."
+                "Rewards reports nothing left to earn here, or did not advance it "
+                f"— the log above says which (path: {source})."
             )
         return result
 

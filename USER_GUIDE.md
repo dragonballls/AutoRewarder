@@ -134,8 +134,8 @@ Adding another account is slightly different, so please follow these steps:
 - It may occasionally switch to Images/Videos/News tabs
 - It may take short "coffee breaks" during longer sessions
 - If Schedule is enabled and Advanced scheduling is on, the run is paced across the schedule duration using the queries-per-hour target. You will see a clear "Done!" message in the logs when the advanced scheduling run fully completes.
-- After the PC phase, it attempts the visible Daily Set + "More Activities" actions. A Daily Set is marked complete only after a fresh dashboard read verifies every original actionable card is complete; otherwise it remains eligible for retry.
-- It then completes the three earn-page activities that a single click cannot finish: **Read to Earn** (the article is opened and read for long enough to be credited), **Explore on Bing** (the topics inside the card are opened in turn), and the **daily check-in** (claimed once a day). Each is confirmed by re-reading the card's own progress afterwards, and anything that does not advance is logged rather than counted.
+- After the PC phase, it earns the Daily Set + "More Activities" and the quest punchcards by reporting each open offer through the same activity endpoint the Rewards page itself uses, then re-reading Rewards' own offer list. A Daily Set is marked complete only when every one of today's offers reads back complete; anything that does not advance stays eligible for retry and the day is left unmarked.
+- It then earns the three earn-page activities the same way: **Read to Earn**, **Explore on Bing** and the **daily check-in** are offers in that same list, and each is counted only when its own progress moves. If a report is accepted but moves nothing, Read to Earn and Explore get one pass on the page as well, and the result is still confirmed from the offer list rather than from the pass's own opinion of itself.
 - Visual Search is attempted after the PC phase. The app marks it complete only when Rewards progress increases from a recorded pre-run baseline; otherwise it reports that credit could not be verified and leaves it unmarked.
 - The process continues until all searches are complete, or until you click **Stop**
 - You'll see updates in the log window
@@ -144,7 +144,7 @@ If a new version is available, AutoRewarder can show an update notification and 
 
 ### Daily tasks only
 
-If you've already done your searches manually (or just want to clean up the dashboard quickly), enable the **"Daily tasks only"** toggle before starting. The run skips both Bing search phases and opens the Rewards dashboard to attempt the Daily Set/More Activities actions, Read to Earn, Explore on Bing, the daily check-in and Visual Search. Unverified work is not recorded as complete. Read to Earn, Explore and the check-in still run on a day whose Daily Set is already done, because they are separate points.
+If you've already done your searches manually (or just want to clean up the dashboard quickly), enable the **"Daily tasks only"** toggle before starting. The run skips both Bing search phases and earns the Daily Set/More Activities actions, Read to Earn, Explore on Bing, the daily check-in and Visual Search. Nothing is recorded as complete unless Rewards confirms it. Read to Earn, Explore and the check-in still run on a day whose Daily Set is already done, because they are separate points.
 
 Anything already marked as done for today is skipped, and the log says so — see [Force daily tasks & visual search](#force-daily-tasks--visual-search) to run it again anyway.
 
@@ -154,7 +154,7 @@ Anything already marked as done for today is skipped, and the log says so — se
 
 | Result | What it means |
 | --- | --- |
-| **verified** | The task ran *and* Rewards showed the work counted — the card's progress moved, or its success badge appeared. |
+| **verified** | Rewards' own data says the work counted — the offer's progress moved, or it reads complete. |
 | **ran, not verified** | The task executed without error, but Rewards did not confirm it. Worth a second look: it may have been already done, or the offer may not be available today. |
 
 Testing **never marks a day as done**, so it is safe to use before your real run. Testing Read to Earn in the morning will not make the evening run skip the Daily Set.
@@ -168,7 +168,11 @@ python AutoRewarder.py --list-tasks
 python AutoRewarder.py --test-task read_to_earn --account Alice
 ```
 
-Two tasks cannot be fully confirmed this way, and the app says so rather than pretending: the **pending points claim** (Rewards does not report a claim in the page — check your balance) and **searches** (a search submits fine even when Rewards does not count it — watch your points total).
+Two tasks cannot be fully confirmed on their own, and the app says so rather than pretending: the **pending points claim** (Rewards does not report a claim in the page — check your balance) and **searches** (a search submits fine even when Rewards does not count it — watch your points total).
+
+### If the balance says "not found"
+
+The balance is read from the offer list's own payload first, so it no longer depends on a dashboard card having rendered. "Balance not found" now means Rewards did not answer with an offer list at all, which is usually a sign-in problem: run **First Setup** for that account. First Setup checks the sign-in with Rewards before it reports success, and says so if the account is still signed out.
 
 ### Visual Search
 
@@ -460,7 +464,7 @@ A: You can run as many sessions as you want. The UI allows PC (0-130) and Mobile
 
 **Q: Why does it ask me to do First Setup?**
 
-A: First Setup creates a separate browser profile for each account. You only need to run it once per account.
+A: First Setup creates a separate browser profile for each account. You only need to run it once per account. Sign in with the Microsoft account that belongs to that profile and let the sign-in finish before closing the window: First Setup now asks Rewards whether the profile is signed in, and says so if it is not.
 
 **Q: What if the app freezes?**
 
