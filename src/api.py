@@ -2706,7 +2706,7 @@ class AutoRewarderAPI:
             dict: {ok, task, label, verified, detail, notes} — `ok` false with a
             `reason` when the test could not run at all.
         """
-        from .dailytasks.task_test import TaskTester, resolve_task
+        from .dailytasks.task_test import TASKS, TaskTester, resolve_task
 
         try:
             canonical = resolve_task(task)
@@ -2733,6 +2733,24 @@ class AutoRewarderAPI:
             needs_driver = canonical not in ("pc_searches", "mobile_searches")
             if needs_driver:
                 driver = self.driver_manager.setup_driver(headless=True, mobile=False)
+                # A test on a signed-out profile would report "nothing found" for
+                # every task, which looks like a broken task rather than a broken
+                # session. Say which it is.
+                try:
+                    driver.get("https://rewards.bing.com/dashboard")
+                except Exception as e:
+                    self.log(f"[WARNING] Could not reach the Rewards dashboard: {e}")
+                if not self._ensure_signed_in(driver):
+                    return {
+                        "ok": False,
+                        "reason": "signed_out",
+                        "task": canonical,
+                        "label": TASKS[canonical]["label"],
+                        "error": (
+                            "This account is signed out, so the task cannot be "
+                            "tested. Sign in with First Setup first."
+                        ),
+                    }
 
             human = (
                 HumanBehavior(driver, show_cursor=False, mobile=False)
@@ -2883,6 +2901,46 @@ class AutoRewarderAPI:
             except Exception as e:
                 self.log(f"[WARNING] Failed to show star prompt: {e}")
 
+    def _ensure_signed_in(self, driver):
+        """
+        Check the browser reached a signed-in Rewards page, and say so clearly.
+
+        Signed out, every task fails the same way — no cards found, no claim
+        tile, no check-in — and each reports it as "nothing to do". That reads
+        exactly like "your account is finished for the day", which sends the user
+        looking in the wrong place. One check here turns ten misleading warnings
+        into one accurate message.
+
+        Returns:
+            bool: True when the session looks usable, or when the check itself is
+            inconclusive (a page that can't be read must not block a run).
+        """
+        if driver is None:
+            return True
+
+        try:
+            url = (driver.current_url or "").casefold()
+        except Exception:
+            return True
+
+        # A Rewards page that redirected to a sign-in host means the stored
+        # profile is no longer authenticated.
+        sign_in_hosts = (
+            "login.live.com",
+            "login.microsoftonline.com",
+            "account.microsoft.com",
+        )
+        if not any(host in url for host in sign_in_hosts):
+            return True
+
+        self.log(
+            "[ERROR] The browser was sent to a sign-in page, so this account is "
+            "signed out. Nothing below can earn points until it is signed in again: "
+            "open the account's browser with First Setup, sign in to Microsoft, "
+            "and close the window."
+        )
+        return False
+
     def _run_daily_only(self):
         """
         Open a PC driver, run only the Daily Set + More Activities, scrape
@@ -2913,6 +2971,15 @@ class AutoRewarderAPI:
 
         self._driver = self.driver_manager.setup_driver(mobile=False)
         try:
+            # Signed out, every task below would fail with "nothing found" and
+            # look like an already-finished day. One clear message instead.
+            try:
+                self._driver.get("https://rewards.bing.com/dashboard")
+            except Exception as e:
+                self.log(f"[WARNING] Could not reach the Rewards dashboard: {e}")
+            if not self._ensure_signed_in(self._driver):
+                return
+
             if run_daily_set:
                 self._daily_set_attempted = True
                 human = HumanBehavior(self._driver, show_cursor=True, mobile=False)
@@ -3355,6 +3422,16 @@ class AutoRewarderAPI:
 
         self._driver = self.driver_manager.setup_driver(mobile=mobile)
         try:
+            # The daily tasks run after the searches, so check the session now
+            # rather than after twenty minutes of searching a signed-out profile.
+            if do_daily_set:
+                try:
+                    self._driver.get("https://rewards.bing.com/dashboard")
+                except Exception as e:
+                    self.log(f"[WARNING] Could not reach the Rewards dashboard: {e}")
+                if not self._ensure_signed_in(self._driver):
+                    return
+
             done = self.search_engine.perform_searches(
                 self._driver,
                 queries_to_search,

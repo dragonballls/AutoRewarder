@@ -155,6 +155,61 @@ class NoNetworkTests(unittest.TestCase):
             self.assertNotIn("import requests", source, module)
 
 
+class SignedOutDetectionTests(unittest.TestCase):
+    """
+    Signed out, every task used to fail identically — "nothing found" — which
+    reads like an already-finished day and sends the user looking in the wrong
+    place. The run now says what is actually wrong.
+    """
+
+    def _api(self):
+        api = api_module.AutoRewarderAPI.__new__(api_module.AutoRewarderAPI)
+        self.logs = []
+        api.log = self.logs.append
+        return api
+
+    def _driver(self, url):
+        driver = mock.Mock()
+        driver.current_url = url
+        return driver
+
+    def test_a_sign_in_redirect_is_reported(self):
+        api = self._api()
+        self.assertFalse(
+            api._ensure_signed_in(
+                self._driver("https://login.live.com/oauth20_authorize.srf?x=1")
+            )
+        )
+        self.assertTrue(any("signed out" in line for line in self.logs))
+        self.assertTrue(
+            any("First Setup" in line for line in self.logs), "say how to fix it"
+        )
+
+    def test_microsoft_online_and_account_hosts_are_detected_too(self):
+        for url in (
+            "https://login.microsoftonline.com/abc/oauth2",
+            "https://account.microsoft.com/account",
+        ):
+            api = self._api()
+            self.assertFalse(api._ensure_signed_in(self._driver(url)), url)
+
+    def test_a_rewards_page_is_treated_as_signed_in(self):
+        api = self._api()
+        self.assertTrue(
+            api._ensure_signed_in(self._driver("https://rewards.bing.com/dashboard"))
+        )
+        self.assertEqual(self.logs, [], "no warning when the session is fine")
+
+    def test_an_unreadable_page_does_not_block_the_run(self):
+        api = self._api()
+        broken = mock.Mock()
+        type(broken).current_url = mock.PropertyMock(side_effect=RuntimeError("gone"))
+        self.assertTrue(api._ensure_signed_in(broken))
+
+    def test_no_driver_is_not_an_error_here(self):
+        self.assertTrue(self._api()._ensure_signed_in(None))
+
+
 class NoTypoEngineTests(unittest.TestCase):
     def test_queries_survive_a_missing_nlpaug(self):
         queries = ["quiche lorraine", "weather paris"]
