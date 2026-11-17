@@ -149,7 +149,6 @@ See the [Development Setup](#development-setup-for-developers) section.
 - About page (app details, update checks, data-folder access)
 - Unsaved-change indicators in Settings
 - LLM Model Picker (provider-based selection, custom models, API key visibility)
-- Optional local Ollama AI Helper for read-only settings explanations and log diagnostics
 - Customizable delays between manual searches (min/max pause range)
 
 **Automation & Core Logic:**

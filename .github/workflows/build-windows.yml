@@ -42,12 +42,15 @@ jobs:
           if (!(Test-Path "dist/AutoRewarder-Ollama/AutoRewarder-Ollama.exe")) {
             throw "The Windows build did not produce AutoRewarder-Ollama.exe."
           }
-          $helperCandidates = @(
-            "dist/AutoRewarder-Ollama/gui/ai_helper.html",
-            "dist/AutoRewarder-Ollama/_internal/gui/ai_helper.html"
+          # The read-only AI helper was removed: AutoRewarder exists to complete
+          # Rewards tasks, and a chat assistant that only explains settings or
+          # logs does not earn points. Guard the main window instead.
+          $windowCandidates = @(
+            "dist/AutoRewarder-Ollama/gui/index.html",
+            "dist/AutoRewarder-Ollama/_internal/gui/index.html"
           )
-          if (!($helperCandidates | Where-Object { Test-Path $_ })) {
-            throw "The Windows build is missing the Ollama helper UI."
+          if (!($windowCandidates | Where-Object { Test-Path $_ })) {
+            throw "The Windows build is missing the application UI."
           }
           Compress-Archive -Path "dist/AutoRewarder-Ollama" -DestinationPath "dist/AutoRewarder-Ollama-Windows.zip" -CompressionLevel Optimal -Force
 
@@ -66,7 +69,7 @@ jobs:
           target_commitish: feat/local-ollama-support-assistant
           name: AutoRewarder Ollama Preview
           body: |
-            Automated Windows preview build of the AutoRewarder fork with the selectable local Ollama LLM provider and optional AI helper.
+            Automated Windows preview build of the AutoRewarder fork with the selectable local Ollama LLM provider.
 
             Source branch: feat/local-ollama-support-assistant
             Build commit: ${{ github.sha }}
