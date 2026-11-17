@@ -33,6 +33,14 @@ if __name__ == "__main__":
         if "--headless" in sys.argv:
             sys.argv.remove("--headless")
 
+        # Same Internet-marker problem applies on the frozen headless path: the
+        # scheduled task launches this exe, and the CLR must be able to load its
+        # bundled assembly. Nothing imports pywebview here, but the unblock is
+        # cheap and keeps both entries consistent.
+        from src.clr_support import ensure_managed_runtime_loadable
+
+        ensure_managed_runtime_loadable()
+
         from AutoRewarder_CLI import main as headless_main
 
         headless_main()
@@ -40,6 +48,19 @@ if __name__ == "__main__":
 
     # GUI path — import webview + the API lazily so the headless path doesn't
     # pay for the pywebview import cost.
+    #
+    # pywebview pulls in `clr` -> pythonnet, which loads the bundled
+    # Python.Runtime.dll through the .NET Framework. A copy extracted from a
+    # downloaded ZIP carries Windows' Internet marker, and the CLR refuses to
+    # load a marked assembly with "Failed to resolve
+    # Python.Runtime.Loader.Initialize". Clear the mark first, while the only
+    # cost is a few stat calls.
+    from src.clr_support import ensure_managed_runtime_loadable
+
+    # The window does not exist yet, so the message is logged once the API can
+    # report it; the unblocking itself happens before webview is imported.
+    unblocked_clr_files = ensure_managed_runtime_loadable()
+
     import webview
 
     from src.api import AutoRewarderAPI
@@ -56,6 +77,12 @@ if __name__ == "__main__":
         background_color="#0b0d12",
     )
     api.set_window(window)  # pass window reference to AutoRewarderAPI for logging
+
+    if unblocked_clr_files:
+        api.log(
+            "Windows had marked the bundled .NET files as downloaded from the "
+            f"Internet; unblocked {len(unblocked_clr_files)} so the app can start."
+        )
 
     # Secondary windows (History, Statistics) are independent pywebview windows.
     # pywebview keeps the process alive as long as ANY window is open, so once
