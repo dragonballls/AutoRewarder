@@ -15,7 +15,10 @@ hidden_imports = [
 if is_windows:
     hidden_imports.append('pystray._win32')
 else:
-    hidden_imports += ['PySide6', 'gi']
+    # The window is opened through Qt (`webview.start(gui="qt")`), which
+    # pywebview reaches via qtpy. `gi` is only used by the GTK backend, which
+    # this build does not use, so bundling it just bloats the archive.
+    hidden_imports += ['PySide6', 'qtpy']
 
 
 def optional_data_files(package):

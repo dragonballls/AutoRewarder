@@ -190,5 +190,57 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn("needs: [build-windows, build-linux]", workflow)
 
 
+class ReleaseBlockingTests(unittest.TestCase):
+    """
+    A build job that cannot succeed withholds the release from everyone, because
+    publishing waits for it. These lock in the two ways the Linux job could not.
+    """
+
+    def _workflow(self):
+        with open(
+            os.path.join(REPO_ROOT, ".github/workflows/build-release.yml"),
+            encoding="utf-8",
+        ) as handle:
+            return handle.read()
+
+    def _requirements(self):
+        with open(
+            os.path.join(REPO_ROOT, "requirements.txt"), encoding="utf-8"
+        ) as handle:
+            return handle.read()
+
+    def test_the_qt_binding_pywebview_imports_is_declared(self):
+        """
+        `webview.start(gui="qt")` reaches Qt through qtpy, and qtpy needs a
+        binding to find. Neither was declared for Linux, so a packaged Linux
+        build could not import the backend it opens its window with.
+        """
+        requirements = self._requirements()
+        self.assertIn("PySide6", requirements)
+        self.assertIn("QtPy", requirements)
+
+    def test_pygobject_is_not_installed_for_the_build(self):
+        """
+        The app uses the Qt backend on Linux, not GTK. PyGObject builds from
+        source against system GObject headers that a bare runner lacks, so it
+        fails the install and the whole release with it.
+        """
+        self.assertIn("/PyGObject/d", self._workflow())
+
+    def test_the_qt_backend_is_checked_during_the_build(self):
+        """A broken backend should fail the build, not the user's first run."""
+        self.assertIn("import webview.platforms.qt", self._workflow())
+
+    def test_a_linux_failure_does_not_withhold_the_windows_download(self):
+        """The download most people want must not depend on the other platform."""
+        workflow = self._workflow()
+        self.assertIn("needs.build-windows.result == 'success'", workflow)
+        self.assertIn("continue-on-error: true", workflow)
+
+    def test_the_release_fails_when_there_is_no_windows_download(self):
+        """Guard against publishing a release whose only asset is missing."""
+        self.assertIn("no Windows download to publish", self._workflow())
+
+
 if __name__ == "__main__":
     unittest.main()
