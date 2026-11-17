@@ -83,9 +83,9 @@ class UpdaterTargetTests(unittest.TestCase):
         auto-update never offers them, so the version must move with the work.
         """
         self.assertTrue(
-            _version_tuple(config.CURRENT_VERSION) > _version_tuple("v4.5"),
-            f"{config.CURRENT_VERSION} must be newer than the v4.5 builds, or "
-            "nobody with auto-update receives this fix",
+            _version_tuple(config.CURRENT_VERSION) > _version_tuple("v4.6"),
+            f"{config.CURRENT_VERSION} must be newer than the v4.6 builds, or "
+            "nobody with auto-update receives this update",
         )
 
 

@@ -1,16 +1,19 @@
 [Setup]
 AppName=AutoRewarder
 AppId=AutoRewarder
-AppVersion=4.5
+AppVersion=4.6
 AppPublisher=Sino Safarov
 AppPublisherURL=https://github.com/safarsin
-DefaultDirName={pf}\AutoRewarder
+; Per-user and under LOCALAPPDATA on purpose. Program Files needs an
+; administrator to write, which would make the in-app updater ask for elevation
+; on every update. Here the app can replace itself, so "Update now" just works.
+DefaultDirName={localappdata}\Programs\AutoRewarder
 DefaultGroupName=AutoRewarder
 OutputDir=dist
 OutputBaseFilename=AutoRewarder-Setup
 Compression=lzma2
 SolidCompression=yes
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern dynamic
 DisableWelcomePage=no
@@ -25,7 +28,7 @@ Source: "dist\AutoRewarder\*"; DestDir: "{app}"; Flags: ignoreversion recursesub
 [Icons]
 Name: "{group}\AutoRewarder"; Filename: "{app}\AutoRewarder.exe"; IconFilename: "{app}\AutoRewarder.exe"
 Name: "{group}\Uninstall"; Filename: "{uninstallexe}"; Tasks: not startmenu
-Name: "{commondesktop}\AutoRewarder"; Filename: "{app}\AutoRewarder.exe"; Tasks: desktopicon
+Name: "{userdesktop}\AutoRewarder"; Filename: "{app}\AutoRewarder.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional tasks:"
@@ -33,8 +36,8 @@ Name: "startmenu"; Description: "Create Start Menu shortcut"; GroupDescription: 
 
 [Run]
 Filename: "{app}\AutoRewarder.exe"; Description: "Launch AutoRewarder"; Flags: nowait postinstall skipifsilent
-Filename: "https://github.com/safarsin/AutoRewarder/blob/main/USER_GUIDE.md"; Description: "Read User Guide on GitHub"; Flags: shellexec nowait postinstall
-Filename: "https://github.com/safarsin/AutoRewarder"; Description: "Open GitHub repository (leave a star if you find this app useful)"; Flags: shellexec nowait postinstall skipifsilent unchecked
+Filename: "https://github.com/dragonballls/AutoRewarder/blob/main/USER_GUIDE.md"; Description: "Read User Guide on GitHub"; Flags: shellexec nowait postinstall
+Filename: "https://github.com/dragonballls/AutoRewarder"; Description: "Open GitHub repository (leave a star if you find this app useful)"; Flags: shellexec nowait postinstall skipifsilent unchecked
 Filename: "https://buymeacoffee.com/safarsin"; Description: "Support development (Buy me a coffee)"; Flags: shellexec nowait postinstall skipifsilent unchecked
 
 [UninstallDelete]
@@ -110,6 +113,8 @@ begin
          '• Windows 10 or later' + #13#10 +
          '• Microsoft Edge' + #13#10 +
          '• .NET Framework 4.8 or higher' + #13#10#13#10 +
+         'It installs for your account only, so it can update itself later ' +
+         'without asking for administrator rights.' + #13#10#13#10 +
          'After installation, you can access the User Guide on GitHub.',
          mbInformation, MB_OK);
 end;

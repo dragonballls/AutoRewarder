@@ -10,6 +10,7 @@ import random
 import platform
 import subprocess
 import shutil
+import tempfile
 import threading
 import webbrowser
 
@@ -31,7 +32,8 @@ from .config import (
     status_path,
     stats_path,
 )
-from .utils import check_for_updates
+from . import updater
+from .utils import hidden_process_kwargs
 from .accounts import (
     AccountManager,
     AccountMetaManager,
@@ -109,6 +111,17 @@ class AutoRewarderAPI:
         self._background_logs_window = None
         self._driver = None
         self.is_driver_loading = False
+        # One update at a time, and the progress the panel polls while it runs.
+        self._update_lock = threading.Lock()
+        self._update_cancel = threading.Event()
+        self._update_progress = {"phase": "idle", "done": 0, "total": None}
+        # Rate limiting for the progress redraw: a download reports once per
+        # 256 KB, and each redraw is a round trip into the webview.
+        self._update_notified_at = 0.0
+        self._update_notified_phase = "idle"
+        # Set by the in-app updater: closing the window must end the process,
+        # even with close-to-tray on, because a helper is waiting for it.
+        self._exiting_for_update = False
         self._run_lock = threading.Lock()
         # Serializes ad-hoc balance scrapes so concurrent refreshes can't open
         # two drivers on the same Edge profile at once.
@@ -390,44 +403,33 @@ class AutoRewarderAPI:
         threading.Thread(target=self.run_update_check, daemon=True).start()
 
     def run_update_check(self):
-        """Check for updates and notify the UI when a newer version exists."""
+        """
+        Check for updates at launch and offer the update in the window.
+
+        The old behaviour was a modal alert and a link to a download page. This
+        asks the window to show its own prompt instead, which can offer "Update
+        now" and finish the job here — no browser, no installer.
+        """
         try:
-            needs_update, latest_version = check_for_updates(logger=self.log)
+            release = updater.latest_release()
+            plan = updater.describe_plan(release)
         except Exception as e:
             self.log(f"[ERROR] Error checking for updates: {e}")
             return
 
-        if not needs_update or not latest_version:
-            return
-        if not self._webview_window:
+        if not plan.get("available") or not self._webview_window:
             return
 
-        url = f"https://github.com/{REPO}/releases/latest"
-        msg = (
-            f"Update available: {latest_version} (current {CURRENT_VERSION}).\n"
-            f"Link added to the log area. "
-            f"Please download the latest version for better performance and "
-            f"to avoid potential issues due to Microsoft updates."
-        )
-
-        # Structured call into JS: the text, the link label and the URL are
-        # each passed as plain arguments (via json.dumps), and update_log_link
-        # builds the <a> element with createElement/textContent — no HTML
-        # parsing, so nothing user-controllable can inject markup.
+        latest_version = plan.get("latest")
         try:
             self._webview_window.evaluate_js(
-                "update_log_link("
-                f"{json.dumps(f'New version {latest_version} available.')}, "
-                f"{json.dumps('Click here to download')}, "
-                f"{json.dumps(url)})"
+                "typeof show_update_prompt === 'function' && "
+                f"show_update_prompt({json.dumps(latest_version)}, "
+                f"{json.dumps(CURRENT_VERSION)}, "
+                f"{json.dumps(bool(updater.is_frozen()))})"
             )
         except Exception as e:
-            self.log(f"[ERROR] Error displaying update link: {e}")
-
-        try:
-            self._webview_window.evaluate_js(f"alert({json.dumps(msg)})")
-        except Exception as e:
-            self.log(f"[ERROR] Error displaying update alert: {e}")
+            self.log(f"[ERROR] Error displaying update prompt: {e}")
 
     def open_link(self, url):
         """Open a URL in the system default browser (PyInstaller-safe)."""
@@ -478,8 +480,8 @@ class AutoRewarderAPI:
                     [command, url],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    start_new_session=True,
                     env=env,
+                    **hidden_process_kwargs(),
                 )
                 return True
             else:
@@ -520,6 +522,7 @@ class AutoRewarderAPI:
                     ["xdg-open", APP_DIR],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    **hidden_process_kwargs(),
                 )
             return True
         except Exception as e:
@@ -531,27 +534,279 @@ class AutoRewarderAPI:
         Check GitHub for a newer release on demand (About panel button).
 
         Unlike the launch-time check, the result is returned to the caller
-        instead of being pushed into the activity log.
+        instead of being pushed into the activity log. It says what updating
+        would involve so the panel can offer it rather than send someone to a
+        download page.
 
         Returns:
-            dict: {ok, update_available, latest, current, url}. `ok` is False
-                when GitHub could not be reached; `latest` is None then.
+            dict: {ok, update_available, latest, current, url, asset, size,
+                can_update_in_place, reason}. `ok` is False when GitHub could not
+                be reached; `latest` is None then.
         """
+        plan = None
         try:
-            needs_update, latest = check_for_updates(logger=self.log)
+            release = updater.latest_release()
+            plan = updater.describe_plan(release)
         except Exception as e:
             self.log(f"[ERROR] Error checking for updates: {e}")
-            needs_update, latest = False, None
+
+        if plan is None or plan.get("latest") is None:
+            return {
+                "ok": False,
+                "update_available": False,
+                "latest": None,
+                "current": CURRENT_VERSION,
+                "url": f"https://github.com/{REPO}/releases/latest",
+                "asset": None,
+                "size": None,
+                "can_update_in_place": False,
+                "reason": "unreachable",
+            }
+
         return {
-            "ok": latest is not None,
-            "update_available": bool(needs_update and latest),
-            "latest": latest,
+            "ok": True,
+            "update_available": bool(plan["available"]),
+            "latest": plan["latest"],
             "current": CURRENT_VERSION,
             "url": f"https://github.com/{REPO}/releases/latest",
+            "asset": plan["asset"],
+            "size": plan["size"],
+            # A source checkout has nothing to swap, so the button offers the
+            # download page instead of pretending it can replace its own files.
+            "can_update_in_place": updater.is_frozen(),
+            "reason": plan["reason"],
         }
 
+    def install_update(self):
+        """
+        Download the latest release and restart into it.
+
+        Runs on a worker thread: the download is tens of megabytes and the
+        window has to stay responsive enough to show how it is going. On
+        success the app closes itself and the swap script starts the new copy.
+
+        Returns:
+            dict: {ok, error} — ok only means the update is under way.
+        """
+        if self._update_lock.locked():
+            return {"ok": False, "error": "An update is already running."}
+        if self._run_lock.locked() or self.is_driver_loading:
+            return {
+                "ok": False,
+                "error": (
+                    "A run is in progress. Stop it, then update — the app has "
+                    "to restart to finish."
+                ),
+            }
+        if not updater.is_frozen():
+            return {
+                "ok": False,
+                "error": (
+                    "This copy runs from source, so it cannot replace itself. "
+                    "Download the release instead."
+                ),
+            }
+
+        target = updater.install_dir()
+        if not target:
+            return {"ok": False, "error": "Could not find the app's folder."}
+
+        # Take the lock here, not in the worker: between this check and the
+        # worker's own acquire, a second click would pass the check above and
+        # start a second download of the same build.
+        if not self._update_lock.acquire(blocking=False):
+            return {"ok": False, "error": "An update is already running."}
+
+        self._update_progress = {"phase": "checking", "done": 0, "total": None}
+        self._update_cancel.clear()
+
+        try:
+            thread = threading.Thread(
+                target=self._install_update_worker, args=(target,), daemon=True
+            )
+            thread.start()
+        except Exception as e:
+            self._update_lock.release()
+            return {"ok": False, "error": f"The update could not start: {e}"}
+        return {"ok": True, "error": ""}
+
+    def get_update_progress(self):
+        """How the update in progress is going, for the panel's progress line."""
+        return dict(self._update_progress)
+
+    def cancel_update(self):
+        """Ask a download in progress to stop; nothing is changed on disk."""
+        self._update_cancel.set()
+        return True
+
+    def _set_update_phase(self, phase, done=0, total=None, detail=""):
+        """
+        Record the phase and ask the panel to redraw.
+
+        The redraw is rate-limited: a download reports once per 256 KB, which is
+        a thousand-odd calls for a build this size, and each one is a round trip
+        into the webview. The bar only needs to move a few times a second, so a
+        phase change redraws at once and progress redraws at most every 250 ms.
+        """
+        self._update_progress = {
+            "phase": phase,
+            "done": int(done or 0),
+            "total": None if total is None else int(total),
+            "detail": detail,
+        }
+        now = time.monotonic()
+        phase_changed = phase != self._update_notified_phase
+        if not phase_changed and (now - self._update_notified_at) < 0.25:
+            return
+        self._update_notified_at = now
+        self._update_notified_phase = phase
+
+        if self._webview_window:
+            try:
+                self._webview_window.evaluate_js(
+                    "typeof update_progress_changed === 'function' && "
+                    "update_progress_changed()"
+                )
+            except Exception:
+                pass
+
+    def _install_update_worker(self, target):
+        """
+        The update itself, off the UI thread.
+
+        The caller already holds `_update_lock`; this releases it. Holding it
+        from `install_update` is what makes a double click harmless.
+        """
+        staged = None
+        download_dir = None
+        try:
+            release = updater.latest_release()
+            plan = updater.describe_plan(release)
+            if not plan.get("available") or not plan.get("asset"):
+                self._set_update_phase(
+                    "failed", detail="No update is available for this build."
+                )
+                return
+
+            tag = plan["latest"]
+            download_dir = tempfile.mkdtemp(prefix="autorewarder-download-")
+            filename = plan["asset"]["name"] or "AutoRewarder-update"
+            archive = os.path.join(download_dir, filename)
+
+            self._set_update_phase(
+                "downloading", 0, plan.get("size"), f"Downloading {plan['latest']}"
+            )
+
+            def report(done, total):
+                self._set_update_phase(
+                    "downloading", done, total, f"Downloading {plan['latest']}"
+                )
+
+            path, error = updater.download(
+                plan["asset"]["url"],
+                archive,
+                expected_size=plan.get("size"),
+                progress=report,
+                stop_event=self._update_cancel,
+            )
+            if path is None:
+                phase = "cancelled" if error == "cancelled" else "failed"
+                self._set_update_phase(phase, detail=error or "The download failed.")
+                return
+
+            self._set_update_phase("unpacking", detail="Unpacking the new version")
+            staged = updater.staging_dir(target, tag)
+            updater.clean_staging(staged)
+            folder, error = updater.unpack(path, staged)
+            # The archive has done its job once it is unpacked: a build is
+            # ~300 MB, and keeping it would cost that much disk on every update.
+            shutil.rmtree(download_dir, ignore_errors=True)
+            download_dir = None
+            if folder is None:
+                self._set_update_phase("failed", detail=error)
+                updater.clean_staging(staged)
+                return
+
+            if self._update_cancel.is_set():
+                self._set_update_phase("cancelled", detail="Cancelled.")
+                updater.clean_staging(staged)
+                return
+
+            self._set_update_phase(
+                "restarting", detail="Restarting into the new version"
+            )
+            # `folder`, not `staged`: unpack strips the archive's top-level
+            # folder, so the executable lives in the folder it returns. Handing
+            # over the staging root would fail its "is the exe there" check on
+            # every real update while still passing a test that unpacked by hand.
+            ok, error = updater.apply_and_restart(folder, target)
+            if not ok:
+                self._set_update_phase("failed", detail=error)
+                updater.clean_staging(staged)
+                return
+
+            # Give the panel a moment to draw "restarting", then quit. The swap
+            # script is already waiting for this process to exit.
+            self.log(f"Update to {tag} downloaded. Restarting into it…")
+            time.sleep(1.2)
+            self._quit_for_update()
+        except Exception as e:
+            self._set_update_phase("failed", detail=f"{type(e).__name__}: {e}")
+        finally:
+            # A downloaded build is ~300 MB. It has served its purpose once it
+            # is unpacked, and leaving it behind would cost the person that much
+            # disk on every update. The unpacked copy stays: the helper is
+            # waiting to read it, and removes it once it has copied it over.
+            if download_dir:
+                shutil.rmtree(download_dir, ignore_errors=True)
+            self._update_lock.release()
+
+    def _quit_for_update(self):
+        """
+        Close the app so the updater can replace its files.
+
+        This has to bypass close-to-tray: closing to the tray would leave the
+        process alive, and the swap script waiting for a process that never
+        exits. It is the one path where the app must really end.
+        """
+        window = self._webview_window
+        self._exiting_for_update = True
+        try:
+            if window is not None:
+                window.destroy()
+        except Exception as e:
+            self.log(f"[WARNING] Could not close the window: {e}")
+        # If the window teardown did not end the process (a second window still
+        # open, a backend that keeps living), end it here. The files are already
+        # staged and the helper is waiting, so nothing is lost by exiting.
+        time.sleep(2.0)
+        try:
+            os._exit(0)
+        except Exception:
+            pass
+
     def load_driver_in_background(self):
-        """Warmup the WebDriver download, only if an account is selected."""
+        """
+        Warm up msedgedriver and refresh the balance, once, at launch.
+
+        The warmup used to open a real Edge window on the account's profile for
+        a few seconds. On a machine where the person is watching, that is the
+        browser flashing open and shut by itself. It now only resolves and
+        starts the driver service — what the warmup was for — and leaves the
+        balance to a real session, so nothing appears on screen.
+        """
+        # An update that succeeded left its unpacked build beside the install,
+        # because the helper's job ends with the app restarting. Clear it here,
+        # in the new copy, where nothing is holding it.
+        target = updater.install_dir()
+        if target:
+            stale = updater.sweep_stale_updates(target)
+            if stale:
+                self.log(
+                    f"Removed {len(stale)} leftover update "
+                    f"{'folder' if len(stale) == 1 else 'folders'}."
+                )
+
         if self.account_manager.current_id() is None:
             # Nothing to warm up; empty state.
             if self._webview_window:
@@ -560,15 +815,7 @@ class AutoRewarderAPI:
 
         self.is_driver_loading = True
         try:
-            warmup_driver = self.driver_manager.setup_driver(headless=True)
-            try:
-                # Reuse the warmup driver — already open and bound to this
-                # account's logged-in profile — to refresh the real points
-                # balance on every launch, so the GUI always opens on an
-                # up-to-date total (no extra browser, no UI blocking).
-                self._refresh_balance_on_launch(warmup_driver)
-            finally:
-                warmup_driver.quit()
+            self.driver_manager.warm_up_service()
         except Exception as e:
             self.log(f"[ERROR] Error loading WebDriver: {e}")
         finally:
@@ -1016,7 +1263,7 @@ class AutoRewarderAPI:
                 result = subprocess.run(
                     ["schtasks", "/Query", "/TN", _AUTOSTART_TASK_NAME],
                     capture_output=True,
-                    creationflags=0x08000000,
+                    **hidden_process_kwargs(),
                 )
                 if result.returncode == 0:
                     return True
@@ -1206,7 +1453,7 @@ class AutoRewarderAPI:
                     ["schtasks", "/Query", "/TN", _AUTOSTART_TASK_NAME],
                     capture_output=True,
                     text=True,
-                    creationflags=0x08000000,
+                    **hidden_process_kwargs(),
                 )
                 if q.returncode == 0:
                     d = subprocess.run(
@@ -1219,7 +1466,7 @@ class AutoRewarderAPI:
                         ],
                         capture_output=True,
                         text=True,
-                        creationflags=0x08000000,
+                        **hidden_process_kwargs(),
                     )
                     if d.returncode == 0:
                         self.log("Removed legacy single-task scheduler")
@@ -1257,6 +1504,7 @@ class AutoRewarderAPI:
                             f"{_SYSTEMD_UNIT_NAME}.timer",
                         ],
                         capture_output=True,
+                        **hidden_process_kwargs(),
                     )
                 except Exception:
                     pass
@@ -1274,6 +1522,7 @@ class AutoRewarderAPI:
                     subprocess.run(
                         ["systemctl", "--user", "daemon-reload"],
                         capture_output=True,
+                        **hidden_process_kwargs(),
                     )
                 except Exception:
                     pass
@@ -1381,7 +1630,6 @@ class AutoRewarderAPI:
         trigger catches up at next boot — same behavior as systemd's
         Persistent=true on the Linux side.
         """
-        import tempfile
 
         xml_body = self._build_windows_task_xml(
             account_id, run_time, label or account_id
@@ -1407,7 +1655,7 @@ class AutoRewarderAPI:
                 ],
                 capture_output=True,
                 text=True,
-                creationflags=0x08000000,
+                **hidden_process_kwargs(),
             )
             if result.returncode != 0:
                 self.log(
@@ -1443,7 +1691,7 @@ class AutoRewarderAPI:
                     "/F",
                 ],
                 capture_output=True,
-                creationflags=0x08000000,
+                **hidden_process_kwargs(),
             )
             return True
         except Exception:
@@ -1484,12 +1732,15 @@ class AutoRewarderAPI:
                 fh.write(timer_file)
 
             subprocess.run(
-                ["systemctl", "--user", "daemon-reload"], capture_output=True
+                ["systemctl", "--user", "daemon-reload"],
+                capture_output=True,
+                **hidden_process_kwargs(),
             )
             result = subprocess.run(
                 ["systemctl", "--user", "enable", "--now", timer_unit],
                 capture_output=True,
                 text=True,
+                **hidden_process_kwargs(),
             )
             if result.returncode != 0:
                 self.log(
@@ -1518,6 +1769,7 @@ class AutoRewarderAPI:
             subprocess.run(
                 ["systemctl", "--user", "disable", "--now", timer_unit],
                 capture_output=True,
+                **hidden_process_kwargs(),
             )
             for path in (service_path, timer_path):
                 if os.path.exists(path):
@@ -1526,7 +1778,9 @@ class AutoRewarderAPI:
                     except OSError:
                         pass
             subprocess.run(
-                ["systemctl", "--user", "daemon-reload"], capture_output=True
+                ["systemctl", "--user", "daemon-reload"],
+                capture_output=True,
+                **hidden_process_kwargs(),
             )
             return True
         except Exception:
@@ -2307,51 +2561,6 @@ class AutoRewarderAPI:
             f"via={info.get('via')!r} candidates={info.get('candidates') or []}"
         )
         return None
-
-    def _refresh_balance_on_launch(self, driver):
-        """
-        On-launch balance refresh: if this account is set up, scrape the real
-        balance now using the already-open warmup driver so the GUI opens on an
-        up-to-date total. Runs every launch (not just the first); a failed read
-        silently keeps the previously stored balance.
-        """
-        # Pin to the account that owns this warmup driver. The scrape runs on a
-        # background thread, so a mid-scrape account switch could otherwise save
-        # this profile's balance into another account's stats.json.
-        stats = self.stats
-        meta = self.account_meta
-        account_id = self.account_manager.current_id()
-        if stats is None or meta is None or account_id is None:
-            return
-        if not meta.is_first_setup_done():
-            return
-
-        # Only animate the card on the first launch, when there's nothing to
-        # show yet. On later launches a value is already displayed, so refresh
-        # it silently in the background — no distracting shimmer on a number
-        # that's already there.
-        animate = stats.get_stats()["balance"]["current"] is None
-
-        self.log("Refreshing your Rewards points balance…")
-        if animate:
-            self._set_stats_loading(True)
-        try:
-            balance = self._fetch_balance_with_driver(driver)
-        finally:
-            if animate:
-                self._set_stats_loading(False)
-        if balance is None:
-            self.log(
-                "[INFO] Couldn't read the points balance right now "
-                "(keeping the last known total)."
-            )
-            return
-        # Skip if the user switched accounts while we were scraping.
-        if self.account_manager.current_id() != account_id:
-            return
-        stats.update_balance(balance)
-        self._notify_stats_refresh()
-        self.log(f"Points balance updated: {balance:,}")
 
     def refresh_balance(self):
         """
