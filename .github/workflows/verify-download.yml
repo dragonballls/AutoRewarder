@@ -1,0 +1,83 @@
+name: Verify the published download starts
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to verify
+        required: false
+        default: autorewarder-ollama-preview
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  verify-published-download:
+    runs-on: windows-latest
+    steps:
+      - name: Download the public release asset
+        shell: pwsh
+        run: |
+          $url = "https://github.com/dragonballls/AutoRewarder/releases/download/autorewarder-ollama-preview/AutoRewarder-Ollama-Windows.zip"
+          New-Item -ItemType Directory -Path dl | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile dl/app.zip
+          $len = (Get-Item dl/app.zip).Length
+          Write-Host "downloaded $len bytes"
+          if ($len -lt 10MB) { Write-Host "::error::asset looks truncated"; exit 1 }
+
+      - name: Extract the way a user does, marker and all
+        shell: pwsh
+        run: |
+          # A browser download leaves Zone.Identifier on the zip; Explorer
+          # propagates it to the extracted tree.
+          Set-Content -Path dl/app.zip -Stream Zone.Identifier -Value "[ZoneTransfer]`nZoneId=3`n" -NoNewline
+          Expand-Archive -Path dl/app.zip -DestinationPath ex -Force
+          Get-ChildItem ex -Recurse -File |
+            Where-Object { $_.Extension -in ".exe", ".dll" } |
+            ForEach-Object { Set-Content -Path $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`nZoneId=3`n" -NoNewline }
+          $dll = "ex/AutoRewarder-Ollama/_internal/pythonnet/runtime/Python.Runtime.dll"
+          if (!(Test-Path $dll)) { Write-Host "::error::the runtime dll is missing from the archive"; exit 1 }
+          $streams = (Get-Item $dll -Stream *).Stream
+          if ($streams -notcontains "Zone.Identifier") { Write-Host "::error::could not reproduce the download marker"; exit 1 }
+          Write-Host "marker set on the runtime dll, as a download leaves it"
+
+      - name: Launch the exe
+        shell: pwsh
+        run: |
+          $p = "ex/AutoRewarder-Ollama/AutoRewarder-Ollama.exe"
+          $proc = Start-Process -FilePath $p -PassThru -RedirectStandardOutput o.txt -RedirectStandardError e.txt
+          Start-Sleep -Seconds 35
+          $proc.Refresh()
+          if ($proc.HasExited) { Write-Host "EXITED code=$($proc.ExitCode)" }
+          else { Write-Host "RUNNING"; $proc.Kill() }
+          Write-Host "=== STDOUT ==="; Get-Content o.txt -ErrorAction SilentlyContinue
+          Write-Host "=== STDERR ==="; Get-Content e.txt -ErrorAction SilentlyContinue
+
+      - name: The download must start cleanly
+        shell: pwsh
+        run: |
+          $err = (Get-Content e.txt -ErrorAction SilentlyContinue) -join "`n"
+          Write-Host "=== STDOUT ==="; Get-Content o.txt -ErrorAction SilentlyContinue
+          if ($err -match "Failed to resolve Python.Runtime.Loader.Initialize") {
+            Write-Host "::error::The published download still cannot start: the CLR refused the marked assembly."
+            exit 1
+          }
+          if ($err -match "Traceback \(most recent call last\)") {
+            Write-Host "::error::The published download raised on startup."
+            exit 1
+          }
+          Write-Host "OK: the published download starts from a marked extraction"
+
+      - name: Headless mode must start too
+        shell: pwsh
+        run: |
+          $p = "ex/AutoRewarder-Ollama/AutoRewarder-Ollama.exe"
+          $proc = Start-Process -FilePath $p -ArgumentList "--headless" -PassThru -RedirectStandardOutput ho.txt -RedirectStandardError he.txt
+          Start-Sleep -Seconds 25
+          $proc.Refresh()
+          if (!$proc.HasExited) { $proc.Kill() } else { Write-Host "headless exited code=$($proc.ExitCode) (expected without a profile)" }
+          $err = (Get-Content he.txt -ErrorAction SilentlyContinue) -join "`n"
+          if ($err -match "Failed to resolve Python.Runtime.Loader.Initialize") {
+            Write-Host "::error::headless mode cannot load the CLR from a marked extraction."
+            exit 1
+          }
+          Write-Host "OK: headless mode loads the CLR"
