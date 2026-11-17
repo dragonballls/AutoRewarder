@@ -1738,6 +1738,12 @@ function render_about_panel(info) {
   const dir = document.getElementById('about_app_dir');
   const status = document.getElementById('about_status');
   if (version) version.textContent = 'AutoRewarder ' + (info.version || '');
+  // The header used to hardcode the version, so it kept claiming the old one
+  // after an update. It now shows what the app actually reports.
+  const brand = document.getElementById('brand_version');
+  if (brand) {
+    brand.textContent = 'Microsoft Rewards' + (info.version ? ' · ' + info.version : '');
+  }
   if (dir) {
     dir.textContent = info.app_dir || '—';
     dir.title = info.app_dir || '';
