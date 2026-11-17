@@ -130,6 +130,7 @@ Adding another account is slightly different, so please follow these steps:
 - It performs random searches from a built-in list of +10k real search queries (from a google-trends dataset) or from your own LLM provider (if enabled)
 - Each search has human-like delays and behavior
 - It runs the PC phase first, then the Mobile phase (iPhone emulation)
+- If you set PC searches to 0 and keep Mobile searches, the dashboard tasks below still run first: they are desktop points, so they are earned in a short task-only desktop pass instead of being skipped with the PC searches.
 - It may occasionally switch to Images/Videos/News tabs
 - It may take short "coffee breaks" during longer sessions
 - If Schedule is enabled and Advanced scheduling is on, the run is paced across the schedule duration using the queries-per-hour target. You will see a clear "Done!" message in the logs when the advanced scheduling run fully completes.

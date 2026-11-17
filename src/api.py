@@ -2416,6 +2416,21 @@ class AutoRewarderAPI:
         self._run_planned_total = total
         self._plan_run_queries()
 
+        # With no PC searches there is no PC batch to carry the desktop-only
+        # tasks (Daily Set, Read to Earn, Explore, check-in, Visual Search), so
+        # run them once up front rather than dropping the day's task points.
+        if pc == 0 and mobile > 0 and not self._stop_event.is_set():
+            self.log(
+                "No PC searches requested; earning dashboard tasks before the "
+                "Mobile search batches."
+            )
+            self._run_phase(
+                mobile=False,
+                count=0,
+                do_daily_set=True,
+                search_delay_range=search_delay_range,
+            )
+
         pc_left = pc
         mobile_left = mobile
 
@@ -2627,6 +2642,21 @@ class AutoRewarderAPI:
                         self._run_phase(
                             mobile=False,
                             count=pc_count,
+                            do_daily_set=True,
+                            search_delay_range=search_delay_range,
+                        )
+                    elif mobile_count > 0 and not self._stop_event.is_set():
+                        # PC searches are off, but the dashboard tasks are
+                        # desktop-only points: run them before Mobile searches
+                        # instead of losing Daily Set, Read to Earn, Explore,
+                        # check-in and Visual Search with the PC phase.
+                        self.log(
+                            "No PC searches requested; earning dashboard tasks "
+                            "before Mobile searches."
+                        )
+                        self._run_phase(
+                            mobile=False,
+                            count=0,
                             do_daily_set=True,
                             search_delay_range=search_delay_range,
                         )
@@ -3406,28 +3436,36 @@ class AutoRewarderAPI:
         Open a driver for a single phase (PC or Mobile), do `count` searches,
         optionally run the Daily Set, then quit.
 
+        A phase with `count` of 0 runs the dashboard tasks only and performs no
+        searches. The Mobile-only path uses that to earn the desktop-only
+        points (Daily Set, Read to Earn, Explore, check-in, Visual Search)
+        instead of skipping them along with the PC searches.
+
         Args:
             mobile (bool): whether this is the Mobile phase (True) or PC phase (False)
             count (int): how many searches to perform in this phase
             do_daily_set (bool): whether to run the Daily Set after searches (PC phase only)
         """
         label = "Mobile" if mobile else "PC"
-        self.log(
-            f"=== {label} phase — {count} {'queries' if count != 1 else 'query'} ==="
-        )
-
-        queries_to_search = self._next_planned_queries(count)
-        if queries_to_search:
-            self.log(f"{label}: using {len(queries_to_search)} planned query(ies).")
+        if count > 0:
+            self.log(
+                f"=== {label} phase — {count} {'queries' if count != 1 else 'query'} ==="
+            )
+            queries_to_search = self._next_planned_queries(count)
+            if queries_to_search:
+                self.log(f"{label}: using {len(queries_to_search)} planned query(ies).")
+            else:
+                queries_to_search = self._build_queries(count)
+            if not queries_to_search:
+                self.log(f"[WARNING] {label}: no queries available. Skipping phase.")
+                if self.history is not None:
+                    self.history.add_to_history(
+                        "N/A", f"[ERROR] {label}: no queries available"
+                    )
+                return
         else:
-            queries_to_search = self._build_queries(count)
-        if not queries_to_search:
-            self.log(f"[WARNING] {label}: no queries available. Skipping phase.")
-            if self.history is not None:
-                self.history.add_to_history(
-                    "N/A", f"[ERROR] {label}: no queries available"
-                )
-            return
+            self.log(f"=== {label} phase — dashboard tasks only, no searches ===")
+            queries_to_search = []
 
         self._driver = self.driver_manager.setup_driver(mobile=mobile)
         try:
@@ -3441,16 +3479,18 @@ class AutoRewarderAPI:
                 if not self._ensure_signed_in(self._driver):
                     return
 
-            done = self.search_engine.perform_searches(
-                self._driver,
-                queries_to_search,
-                mobile=mobile,
-                stop_event=self._stop_event,
-                search_delay_range=search_delay_range,
-            )
-            # Tally successful searches against the right platform bucket.
-            bucket = "mobile" if mobile else "pc"
-            self._session_counts[bucket] += int(done or 0)
+            done = 0
+            if queries_to_search:
+                done = self.search_engine.perform_searches(
+                    self._driver,
+                    queries_to_search,
+                    mobile=mobile,
+                    stop_event=self._stop_event,
+                    search_delay_range=search_delay_range,
+                )
+                # Tally successful searches against the right platform bucket.
+                bucket = "mobile" if mobile else "pc"
+                self._session_counts[bucket] += int(done or 0)
 
             ran_daily_set = False
 
