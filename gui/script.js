@@ -403,8 +403,6 @@ function start_bot() {
 
   const stopBtn = document.getElementById('stop_btn');
   if (stopBtn) stopBtn.disabled = false;
-  const testActivitiesBtn = document.getElementById('test_activities_btn');
-  if (testActivitiesBtn) testActivitiesBtn.disabled = true;
 
   // Save the query counts to global settings before running.
   if (!dailyOnly) {
@@ -417,51 +415,6 @@ function start_bot() {
 
   update_status_indicator('executing');
   pywebview.api.main(pc, mobile, dailyOnly, 'manual');
-}
-
-async function test_reward_activities() {
-  const testBtn = document.getElementById('test_activities_btn');
-  const startBtn = document.getElementById('start_btn');
-  const stopBtn = document.getElementById('stop_btn');
-  if (!testBtn || !startBtn) return;
-
-  if (!currentAccountId) {
-    show_toast('Add an account first.', 'warning');
-    return;
-  }
-  if (!window.pywebview || !pywebview.api ||
-      typeof pywebview.api.test_activity_discovery !== 'function') {
-    show_toast('Activity testing is unavailable in this app build.', 'error');
-    return;
-  }
-
-  const label = testBtn.querySelector('.activity-test-label');
-  testBtn.disabled = true;
-  startBtn.disabled = true;
-  if (label) label.textContent = 'Testing…';
-  if (stopBtn) stopBtn.disabled = false;
-  update_status_indicator('executing');
-
-  try {
-    const result = await pywebview.api.test_activity_discovery();
-    if (result && result.ok) {
-      const count = Number(result.activity_count || 0);
-      if (count > 0) {
-        show_toast(`Detected ${count} activity card(s). See the Activity log.`, 'success');
-      } else {
-        show_toast('Scan finished; no matching cards were detected. See the Activity log.', 'warning');
-      }
-    } else {
-      const reason = result && result.reason ? String(result.reason).replace(/_/g, ' ') : 'unknown error';
-      show_toast(`Activity test could not run: ${reason}.`, 'warning');
-    }
-  } catch (error) {
-    console.error('Activity discovery test failed:', error);
-    show_toast('Activity test failed. See the Activity log for details.', 'error');
-  } finally {
-    enable_start_button();
-    if (label) label.textContent = 'Test activities';
-  }
 }
 
 function _sync_daily_only_ui() {
@@ -503,12 +456,17 @@ function enable_start_button() {
   const btn = document.getElementById('start_btn');
   const label = btn.querySelector('.btn-label');
   if (label) label.textContent = 'Start run';
-  const current = accountsCache.find(a => a.id === currentAccountId);
   const canRun = can_start_current_mode();
   btn.disabled = !canRun;
 
-  const testBtn = document.getElementById('test_activities_btn');
-  if (testBtn) testBtn.disabled = !(current && current.first_setup_done) || driverWarmingUp || balanceFetching;
+  // Testing one task needs the same readiness as a run: an account that has
+  // finished First Setup.
+  const testBtn = document.getElementById('test_task_btn');
+  if (testBtn) {
+    testBtn.disabled = !canRun || driverWarmingUp || balanceFetching;
+    const testLabel = testBtn.querySelector('span');
+    if (testLabel) testLabel.textContent = 'Test one task';
+  }
 
   // Stop button is meaningful only while a run is in progress.
   const stopBtn = document.getElementById('stop_btn');
@@ -574,6 +532,151 @@ function show_history() {
 
 function show_background_logs() {
   pywebview.api.open_background_logs_window();
+}
+
+/**
+ * Ask which earning task to test, then run only that one.
+ *
+ * Testing a single task is how you find out whether it works on your account:
+ * a full run tells you "done" and moves on. Nothing is marked as complete for
+ * the day, so this is safe to use before the real run.
+ */
+async function test_one_task() {
+  if (!currentAccountId) {
+    show_toast('Add an account first.', 'warning');
+    return;
+  }
+  if (!window.pywebview || !pywebview.api || typeof pywebview.api.test_task !== 'function') {
+    show_toast('Single-task testing is unavailable in this app build.', 'error');
+    return;
+  }
+
+  let tasks = [];
+  try {
+    tasks = await pywebview.api.list_testable_tasks();
+  } catch (err) {
+    console.error('Could not list tasks:', err);
+    show_toast('Could not list the testable tasks.', 'error');
+    return;
+  }
+  if (!Array.isArray(tasks) || !tasks.length) {
+    show_toast('No testable tasks were reported.', 'warning');
+    return;
+  }
+
+  const pick = await _pick_task(tasks);
+  if (!pick) return;
+
+  const btn = document.getElementById('test_task_btn');
+  const startBtn = document.getElementById('start_btn');
+  const stopBtn = document.getElementById('stop_btn');
+  const label = btn ? btn.querySelector('span') : null;
+  if (btn) btn.disabled = true;
+  if (startBtn) startBtn.disabled = true;
+  if (stopBtn) stopBtn.disabled = false;
+  if (label) label.textContent = 'Testing…';
+  update_status_indicator('executing');
+
+  try {
+    const result = await pywebview.api.test_task(pick);
+    if (!result || !result.ok) {
+      const reason = (result && (result.reason || result.error)) || 'unknown error';
+      show_toast(`Test could not run: ${String(reason).replace(/_/g, ' ')}.`, 'warning', { duration: 6000 });
+      return;
+    }
+    // Say exactly what happened: "ran" and "verified" are different answers.
+    if (result.verified) {
+      show_toast(`${result.label}: verified — ${result.detail}`, 'success', { duration: 7000 });
+    } else {
+      show_toast(`${result.label}: ran, not verified — ${result.detail}`, 'warning', { duration: 8000 });
+    }
+  } catch (err) {
+    console.error('Single-task test failed:', err);
+    show_toast('The task test failed. See the Activity log for details.', 'error');
+  } finally {
+    if (label) label.textContent = 'Test one task';
+    enable_start_button();
+  }
+}
+
+/**
+ * Present the task list and resolve with the chosen task name, or null.
+ * Uses the app's own modal styling so the picker looks native rather than
+ * relying on a browser dialog the webview may not render.
+ */
+function _pick_task(tasks) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'task-picker-overlay';
+
+    const panel = document.createElement('div');
+    panel.className = 'task-picker';
+
+    const title = document.createElement('h3');
+    title.textContent = 'Test one task';
+    panel.appendChild(title);
+
+    const hint = document.createElement('p');
+    hint.className = 'task-picker-hint';
+    hint.textContent =
+      'Runs only the task you choose and reports what the page confirmed. ' +
+      'Nothing is marked as done for the day.';
+    panel.appendChild(hint);
+
+    const list = document.createElement('div');
+    list.className = 'task-picker-list';
+
+    tasks.forEach(task => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'task-picker-item';
+
+      const name = document.createElement('span');
+      name.className = 'task-picker-name';
+      name.textContent = task.label;
+
+      const desc = document.createElement('span');
+      desc.className = 'task-picker-desc';
+      desc.textContent = task.description;
+
+      item.appendChild(name);
+      item.appendChild(desc);
+      item.addEventListener('click', () => {
+        cleanup();
+        resolve(task.name);
+      });
+      list.appendChild(item);
+    });
+
+    panel.appendChild(list);
+
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'task-picker-cancel';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => {
+      cleanup();
+      resolve(null);
+    });
+    panel.appendChild(cancel);
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    function on_key(event) {
+      if (event.key === 'Escape') {
+        cleanup();
+        resolve(null);
+      }
+    }
+
+    function cleanup() {
+      document.removeEventListener('keydown', on_key);
+      overlay.remove();
+    }
+
+    document.addEventListener('keydown', on_key);
+  });
 }
 
 function show_stats() {

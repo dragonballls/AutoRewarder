@@ -84,20 +84,20 @@
       </div>
 
       <div class="run-actions">
+        <button id="test_task_btn" class="test-task-btn" type="button"
+                onclick="test_one_task()" disabled
+                title="Run a single earning task to check whether it works. Nothing is marked as done for the day.">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 11l3 3L22 4"></path>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+          </svg>
+          <span>Test one task</span>
+        </button>
         <button id="start_btn" class="primary-btn-lg" onclick="start_bot()" disabled>
           <svg class="btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <polygon points="6 4 20 12 6 20 6 4"></polygon>
           </svg>
           <span class="btn-label">Start run</span>
-        </button>
-        <button id="test_activities_btn" class="activity-test-btn" type="button"
-                onclick="test_reward_activities()" disabled
-                title="Read-only check of available activity types. Does not complete activities.">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="10.5" cy="10.5" r="6.5"></circle>
-            <path d="m16 16 5 5"></path>
-          </svg>
-          <span class="activity-test-label">Test activities</span>
         </button>
         <button id="stop_btn" class="stop-btn" type="button" onclick="stop_bot()" disabled aria-label="Stop the current run">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

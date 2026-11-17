@@ -354,6 +354,43 @@ def _run_account(api, acc, pc_override=None, mobile_override=None, force=False):
     return True
 
 
+def _run_test_task(api, task, account_token):
+    """
+    Run one earning task in isolation and print what happened.
+
+    Nothing is marked as complete for the day, so this is safe to run before a
+    real run: it exercises one task and reports whether Rewards confirmed it,
+    which is the only way to know a single task works.
+
+    Args:
+        api: AutoRewarderAPI instance (headless-configured)
+        task: the task name from --test-task
+        account_token: account id/label to test on, or None for the current one
+    """
+    if account_token:
+        acc = _resolve_account(api, account_token)
+        if acc is None:
+            console_log(f"[ERROR] No account matches '{account_token}'.")
+            return
+        if api.account_manager.current_id() != acc["id"]:
+            console_log(f"Switching to account '{acc['label']}'.")
+            api.account_manager.select(acc["id"])
+            api._rebuild_account_context()
+
+    result = api.test_task(task)
+
+    if not result.get("ok"):
+        reason = result.get("reason") or result.get("error") or "unknown"
+        console_log(f"[TEST] Could not run '{task}': {reason}")
+        return
+
+    state = "VERIFIED" if result.get("verified") else "ran, not verified"
+    console_log(f"[TEST] {result['label']}: {state}")
+    console_log(f"[TEST] {result.get('detail', '')}")
+    for note in result.get("notes") or []:
+        console_log(f"[TEST] note: {note}")
+
+
 def main():
     """Parse CLI args and run scheduled or targeted accounts."""
     parser = argparse.ArgumentParser(
@@ -372,6 +409,19 @@ def main():
         action="store_true",
         help="Run even if already triggered today.",
     )
+    parser.add_argument(
+        "--test-task",
+        metavar="NAME",
+        help=(
+            "Run ONE earning task in isolation and report what happened, "
+            "without marking the day as done. Use --list-tasks to see the names."
+        ),
+    )
+    parser.add_argument(
+        "--list-tasks",
+        action="store_true",
+        help="List the earning tasks that --test-task can run.",
+    )
     args = parser.parse_args()
 
     if args.pc is not None and args.pc < 0:
@@ -381,9 +431,18 @@ def main():
 
     api = _create_headless_api()
 
+    if args.list_tasks:
+        for spec in api.list_testable_tasks():
+            console_log(f"{spec['name']:<16} {spec['label']} — {spec['description']}")
+        return
+
     accounts = api.account_manager.list()
     if not accounts:
         console_log("No accounts configured. Nothing to do.")
+        return
+
+    if args.test_task:
+        _run_test_task(api, args.test_task, args.account)
         return
 
     if args.account:
