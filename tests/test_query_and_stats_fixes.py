@@ -133,7 +133,9 @@ class RunQueryPlanningTests(unittest.TestCase):
         api._query_plan = []
         api._run_queries = set()
         api._run_planned_total = 0
-        api._QUERY_PLAN_BATCH = 10
+        # Deliberately NOT setting _QUERY_PLAN_BATCH here: it must come from the
+        # class. Setting it on the instance once masked a real crash where the
+        # planning code read a constant the instance never had.
         settings = mock.Mock()
         settings.get_llm_config.return_value = {
             "use_llm_queries": True,
@@ -201,6 +203,42 @@ class RunQueryPlanningTests(unittest.TestCase):
     def test_no_plan_leaves_the_existing_path_untouched(self):
         api = self._api()
         self.assertEqual(api._next_planned_queries(3), [])
+
+    def test_the_planner_reads_its_batch_size_from_the_class(self):
+        """
+        Regression: _plan_run_queries used `self._QUERY_PLAN_BATCH`, which was
+        only a module constant, so advanced scheduling with an LLM key raised
+        AttributeError on a real object. A test that set the attribute by hand
+        hid it. This asserts the class provides it on an instance built without
+        __init__.
+        """
+        import src.api as api_module
+
+        api = self._api()
+        self.assertEqual(
+            api._QUERY_PLAN_BATCH,
+            api_module._QUERY_PLAN_BATCH,
+            "the instance must expose the class constant the planner reads",
+        )
+        self.assertGreater(api._QUERY_PLAN_BATCH, 1, "batches of 1 are the #159 bug")
+
+    def test_planning_with_a_key_does_not_raise(self):
+        """The whole path, with nothing patched onto the instance."""
+        import src.api as api_module
+
+        api = self._api()
+        api._run_planned_total = 20
+
+        def fake_generate(count, locale, **kwargs):
+            return [f"q{count}-{i}" for i in range(count)]
+
+        with mock.patch.object(api_module, "llm") as fake_llm, mock.patch.object(
+            api_module, "resolve_search_locale", return_value="en-US"
+        ):
+            fake_llm.generate_queries.side_effect = fake_generate
+            api._plan_run_queries()  # must not raise AttributeError
+
+        self.assertEqual(len(api._query_plan), 20)
 
     def test_planning_is_skipped_without_llm(self):
         import src.api as api_module

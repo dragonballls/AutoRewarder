@@ -90,6 +90,12 @@ class AutoRewarderAPI:
     currently-selected account changes.
     """
 
+    # Fewest queries asked of the LLM per planning call (see _plan_run_queries).
+    # A class attribute, because instance state is not built for objects created
+    # outside __init__ (tests do that), and reading it through `self` is what
+    # this method does.
+    _QUERY_PLAN_BATCH = _QUERY_PLAN_BATCH
+
     def __init__(self):
         self._webview_window = None
         self._driver_loader_thread_started = False
