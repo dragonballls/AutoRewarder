@@ -40,8 +40,7 @@ from .accounts import (
 )
 from .emulator import DriverManager, HumanBehavior, edge_policy
 from .search import HistoryManager, SearchEngine, llm, resolve_search_locale
-from .dailytasks import DailySet
-from .manual_tasks.activity_discovery import capture_dashboard_activities
+from .dailytasks import DailySet, EarnActivities
 from .stats import (
     StatsManager,
     scrape_points_balance,
@@ -66,6 +65,12 @@ _SYSTEMD_UNIT_NAME = "autorewarder"
 # Default min/max delay for normal manual searches, in seconds.
 DEFAULT_SEARCH_DELAY = (4.0, 10.0)
 
+# Fewest queries asked of the LLM per planning call. Advanced scheduling drips
+# out small batches (~10 min apart), and asking for one query at a time gave the
+# model no room to vary — the same topic came back all day (issue #159). The
+# run's queries are instead planned in chunks this size or larger.
+_QUERY_PLAN_BATCH = 10
+
 # HH:MM validator — accepts 00:00..23:59.
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -85,6 +90,12 @@ class AutoRewarderAPI:
     the driver, history, daily-set, and meta managers are rebuilt whenever the
     currently-selected account changes.
     """
+
+    # Fewest queries asked of the LLM per planning call (see _plan_run_queries).
+    # A class attribute, because instance state is not built for objects created
+    # outside __init__ (tests do that), and reading it through `self` is what
+    # this method does.
+    _QUERY_PLAN_BATCH = _QUERY_PLAN_BATCH
 
     def __init__(self):
         self._webview_window = None
@@ -135,13 +146,22 @@ class AutoRewarderAPI:
             "earn": 0,
             "quests": 0,
         }
+        # Read / Explore / check-in completions this run, tracked apart from the
+        # Daily Set cards they are counted alongside.
+        self._session_read = 0
+        self._session_explore = 0
+        self._session_check_in = 0
         self._last_scraped_balance = None
         # Whether the Daily Set / visual search already ran in this main() call.
         # A "Force …" setting is persistent, so without these the PC batches of
         # an advanced schedule would each redo the task (and re-upload an image).
         self._daily_set_attempted = False
         self._visual_search_attempted = False
-        self._activity_discovery_attempted = False
+        # Whole-run LLM query plan (see _plan_run_queries) and the queries it has
+        # already produced, so batches don't each trigger a one-shot LLM call.
+        self._query_plan = []
+        self._run_queries = set()
+        self._run_planned_total = 0
         # Last balance-scrape diagnostic ({value, via, candidates, url, title}),
         # surfaced to the dashboard so a failed read can be debugged in place.
         self._last_balance_debug = {}
@@ -791,59 +811,6 @@ class AutoRewarderAPI:
     def is_running(self):
         """True when the bot is mid-run. Used by the headless runner to avoid overlap."""
         return self._run_lock.locked()
-
-    def test_activity_discovery(self):
-        """Run the read-only Rewards activity scanner from the existing GUI.
-
-        The test uses the selected account's existing Edge profile in headless
-        mode. It shares the run lock so it cannot overlap searches or another
-        WebDriver session, and it never changes Rewards account state.
-        """
-        if self.account_manager.current_id() is None:
-            self.log("[ACTIVITY TEST] Select an account first.")
-            return {"ok": False, "reason": "no_account"}
-        if self.account_meta is None or not self.account_meta.is_first_setup_done():
-            self.log("[ACTIVITY TEST] Complete account setup first.")
-            return {"ok": False, "reason": "setup_incomplete"}
-        if self.is_driver_loading:
-            self.log("[ACTIVITY TEST] Wait for the existing browser warmup to finish.")
-            return {"ok": False, "reason": "driver_loading"}
-        if self._balance_lock.locked():
-            self.log(
-                "[ACTIVITY TEST] A balance refresh is using this account profile. "
-                "Try again when it finishes."
-            )
-            return {"ok": False, "reason": "balance_refresh"}
-        if not self._run_lock.acquire(blocking=False):
-            self.log("[ACTIVITY TEST] Another run is active. Test skipped.")
-            return {"ok": False, "reason": "run_active"}
-
-        self._stop_event.clear()
-        self.log("=== Read-only activity discovery test ===")
-        try:
-            self._driver = self.driver_manager.setup_driver(headless=True, mobile=False)
-            activities = self._review_activity_discovery(self._driver, source="TEST")
-            return {
-                "ok": True,
-                "activity_count": len(activities),
-                "categories": sorted({item.kind.value for item in activities}),
-            }
-        except Exception as exc:
-            self.log(f"[ACTIVITY TEST] Failed: {type(exc).__name__}: {exc}")
-            return {"ok": False, "reason": "scan_failed", "error": str(exc)}
-        finally:
-            try:
-                if self._driver is not None:
-                    self._driver.quit()
-            except Exception as exc:
-                self.log(f"[ACTIVITY TEST] Browser cleanup warning: {exc}")
-            self._driver = None
-            self._run_lock.release()
-            try:
-                if self._webview_window:
-                    self._webview_window.evaluate_js("enable_start_button()")
-            except Exception:
-                pass
 
     def stop(self):
         """
@@ -2079,6 +2046,8 @@ class AutoRewarderAPI:
             cumulative estimate. `is_estimate` flags which one it is.
           * session_points — points earned in the last recorded run: the real
             balance delta when available, otherwise the activity estimate.
+          * session_balance_change — the raw balance movement for that run,
+            negative when the account spent points (a redemption).
 
         Returns None when no account is selected.
         """
@@ -2102,6 +2071,10 @@ class AutoRewarderAPI:
                 else last.get("points_estimate", 0)
             ),
             "session_is_estimate": session_delta is None,
+            # Raw balance movement for the session, which stays negative when
+            # the account spent points (e.g. a gift-card redemption). The
+            # dashboard shows it as spend rather than as negative earnings.
+            "session_balance_change": last.get("balance_change"),
         }
 
         # Per-item point values, so the dashboard can split a day's bar into
@@ -2438,6 +2411,11 @@ class AutoRewarderAPI:
             f"Planning {num_batches} batches of ~{per_batch} queries, interval ~{interval:.1f}s"
         )
 
+        # Plan the run's queries before the first batch, so the LLM is asked for
+        # varied batches instead of one stateless query per batch (issue #159).
+        self._run_planned_total = total
+        self._plan_run_queries()
+
         pc_left = pc
         mobile_left = mobile
 
@@ -2607,10 +2585,15 @@ class AutoRewarderAPI:
             "earn": 0,
             "quests": 0,
         }
+        self._session_read = 0
+        self._session_explore = 0
+        self._session_check_in = 0
         self._last_scraped_balance = None
         self._daily_set_attempted = False
         self._visual_search_attempted = False
-        self._activity_discovery_attempted = False
+        self._query_plan = []
+        self._run_queries = set()
+        self._run_planned_total = 0
 
         try:
             if daily_only:
@@ -2705,56 +2688,157 @@ class AutoRewarderAPI:
                 pass
             self._run_lock.release()
 
-    def _review_activity_discovery(self, driver, source="RUN"):
-        """Read and summarize dashboard activity cards without acting on them."""
+    def list_testable_tasks(self):
+        """
+        Return every earning task that can be run on its own, for a test UI.
+
+        Returns:
+            list of dict: [{name, label, description, page}], in run order.
+        """
+        from .dailytasks.task_test import describe_tasks
+
+        return describe_tasks()
+
+    def test_task(self, task):
+        """
+        Run exactly one earning task, to check whether it works.
+
+        This is the "try just this one" path: it opens a single browser session,
+        performs only `task`, and reports what the page said. Nothing is marked
+        as complete for the day, so testing a task in the morning cannot make
+        the real run skip it in the evening.
+
+        Args:
+            task (str): a task name from `list_testable_tasks` (or its label).
+
+        Returns:
+            dict: {ok, task, label, verified, detail, notes} — `ok` false with a
+            `reason` when the test could not run at all.
+        """
+        from .dailytasks.task_test import TASKS, TaskTester, resolve_task
+
         try:
-            activities = capture_dashboard_activities(driver)
-        except Exception as exc:
-            self.log(
-                f"[ACTIVITY {source}] Read-only discovery unavailable: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            return []
+            canonical = resolve_task(task)
+        except ValueError as e:
+            return {"ok": False, "reason": "unknown_task", "error": str(e)}
 
-        prefix = f"[ACTIVITY {source}]"
-        if not activities:
-            self.log(
-                f"{prefix} No Read to Earn / Explore / other activity cards were "
-                "recognized. This does not prove none are available."
-            )
-            return []
+        if self.account_manager.current_id() is None:
+            return {"ok": False, "reason": "no_account"}
+        if self.account_meta is None or not self.account_meta.is_first_setup_done():
+            return {"ok": False, "reason": "setup_incomplete"}
+        if self.is_driver_loading:
+            return {"ok": False, "reason": "driver_loading"}
+        if self._balance_lock.locked():
+            return {"ok": False, "reason": "balance_refresh"}
+        if not self._run_lock.acquire(blocking=False):
+            return {"ok": False, "reason": "run_active"}
 
-        counts = {}
-        for activity in activities:
-            counts[activity.kind.value] = counts.get(activity.kind.value, 0) + 1
-        summary = ", ".join(
-            f"{kind.replace('_', ' ')}: {count}"
-            for kind, count in sorted(counts.items())
-        )
-        self.log(
-            f"{prefix} Found {len(activities)} visible activity card(s) "
-            f"({summary}). All actions remain manual."
-        )
-        for activity in activities:
-            points = (
-                f", {activity.points} points shown"
-                if activity.points is not None
-                else ""
+        self._stop_event.clear()
+        tester = TaskTester(logger=self.log)
+        driver = None
+        try:
+            # The three browser-only tasks manage their own sessions; everything
+            # else runs on one shared driver so the page state carries over.
+            needs_driver = canonical not in ("pc_searches", "mobile_searches")
+            if needs_driver:
+                driver = self.driver_manager.setup_driver(headless=True, mobile=False)
+                # A test on a signed-out profile would report "nothing found" for
+                # every task, which looks like a broken task rather than a broken
+                # session. Say which it is.
+                try:
+                    driver.get("https://rewards.bing.com/dashboard")
+                except Exception as e:
+                    self.log(f"[WARNING] Could not reach the Rewards dashboard: {e}")
+                if not self._ensure_signed_in(driver):
+                    return {
+                        "ok": False,
+                        "reason": "signed_out",
+                        "task": canonical,
+                        "label": TASKS[canonical]["label"],
+                        "error": (
+                            "This account is signed out, so the task cannot be "
+                            "tested. Sign in with First Setup first."
+                        ),
+                    }
+
+            human = (
+                HumanBehavior(driver, show_cursor=False, mobile=False)
+                if driver
+                else None
             )
-            progress = (
-                f", progress {activity.progress_done}/{activity.progress_total}"
-                if (
-                    activity.progress_done is not None
-                    and activity.progress_total is not None
-                )
-                else ""
+            earn = EarnActivities(logger=self.log)
+
+            result = tester.run(
+                canonical,
+                driver=driver,
+                human=human,
+                daily_set=self.daily_set,
+                earn=earn,
+                api=self,
+                stop_event=self._stop_event,
             )
             self.log(
-                f"{prefix} {activity.kind.value.replace('_', ' ').title()} · "
-                f"{activity.status.value.replace('_', ' ')} · "
-                f"{activity.title}{points}{progress}"
+                f"[TEST {result['label']}] "
+                f"{'verified' if result.get('verified') else 'not verified'} — "
+                f"{result.get('detail', '')}"
             )
-        return activities
+            return {"ok": True, **result}
+        except Exception as e:
+            self.log(f"[TEST] Failed: {type(e).__name__}: {e}")
+            return {"ok": False, "reason": "test_failed", "error": str(e)}
+        finally:
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception as e:
+                    self.log(f"[TEST] Browser cleanup warning: {e}")
+            self._run_lock.release()
+            try:
+                if self._webview_window:
+                    self._webview_window.evaluate_js("enable_start_button()")
+            except Exception:
+                pass
+
+    def _run_earn_activities(self, human):
+        """
+        Drive Read to Earn, Explore on Bing and the daily check-in, then fold
+        the verified counts into the session statistics.
+
+        Kept in one place so the normal run and the daily-tasks-only run cannot
+        drift apart. A failure here is logged and swallowed: these are three
+        tasks among many, and none of them may take down the run that earns the
+        rest of the day's points.
+        """
+        if self.daily_set is None or self._driver is None:
+            return
+
+        try:
+            totals = self.daily_set.run_earn_activities(
+                self._driver, human, stop_event=self._stop_event
+            )
+        except Exception as e:
+            if self._stop_event.is_set():
+                return
+            self.log(f"[WARNING] Read/Explore/check-in pass failed: {e}")
+            return
+
+        read = int(totals.get("read", 0) or 0)
+        explore = int(totals.get("explore", 0) or 0)
+        check_in = int(totals.get("check_in", 0) or 0)
+
+        # These are verified against the card's own progress, so they count as
+        # completed cards. `earn`/`quests` stay reserved for the unverified
+        # opens from the generic earn-page pass.
+        self._session_counts["cards"] += read + explore + check_in
+        self._session_read += read
+        self._session_explore += explore
+        self._session_check_in += check_in
+
+        if read or explore or check_in:
+            self.log(
+                f"Earn activities complete: {read} read, {explore} explore, "
+                f"{check_in} check-in."
+            )
 
     def _try_scrape_balance(self):
         """
@@ -2826,6 +2910,46 @@ class AutoRewarderAPI:
             except Exception as e:
                 self.log(f"[WARNING] Failed to show star prompt: {e}")
 
+    def _ensure_signed_in(self, driver):
+        """
+        Check the browser reached a signed-in Rewards page, and say so clearly.
+
+        Signed out, every task fails the same way — no cards found, no claim
+        tile, no check-in — and each reports it as "nothing to do". That reads
+        exactly like "your account is finished for the day", which sends the user
+        looking in the wrong place. One check here turns ten misleading warnings
+        into one accurate message.
+
+        Returns:
+            bool: True when the session looks usable, or when the check itself is
+            inconclusive (a page that can't be read must not block a run).
+        """
+        if driver is None:
+            return True
+
+        try:
+            url = (driver.current_url or "").casefold()
+        except Exception:
+            return True
+
+        # A Rewards page that redirected to a sign-in host means the stored
+        # profile is no longer authenticated.
+        sign_in_hosts = (
+            "login.live.com",
+            "login.microsoftonline.com",
+            "account.microsoft.com",
+        )
+        if not any(host in url for host in sign_in_hosts):
+            return True
+
+        self.log(
+            "[ERROR] The browser was sent to a sign-in page, so this account is "
+            "signed out. Nothing below can earn points until it is signed in again: "
+            "open the account's browser with First Setup, sign in to Microsoft, "
+            "and close the window."
+        )
+        return False
+
     def _run_daily_only(self):
         """
         Open a PC driver, run only the Daily Set + More Activities, scrape
@@ -2856,6 +2980,15 @@ class AutoRewarderAPI:
 
         self._driver = self.driver_manager.setup_driver(mobile=False)
         try:
+            # Signed out, every task below would fail with "nothing found" and
+            # look like an already-finished day. One clear message instead.
+            try:
+                self._driver.get("https://rewards.bing.com/dashboard")
+            except Exception as e:
+                self.log(f"[WARNING] Could not reach the Rewards dashboard: {e}")
+            if not self._ensure_signed_in(self._driver):
+                return
+
             if run_daily_set:
                 self._daily_set_attempted = True
                 human = HumanBehavior(self._driver, show_cursor=True, mobile=False)
@@ -2877,6 +3010,13 @@ class AutoRewarderAPI:
                     self.log("Daily tasks completed and marked as done for today.")
                 else:
                     self.log("Daily tasks failed. Not marked as done for today.")
+
+                # Read to Earn, Explore on Bing and the daily check-in need more
+                # than a click, so they run as their own pass beside the Daily
+                # Set. They are attempted even when the Daily Set came up short:
+                # they are separate points.
+                if not self._stop_event.is_set():
+                    self._run_earn_activities(human)
             else:
                 self.log(
                     "Daily tasks already completed today. Skipping. "
@@ -2884,12 +3024,15 @@ class AutoRewarderAPI:
                 )
                 self._try_scrape_balance()
 
+                # These three are not covered by the Daily Set marker above, so
+                # they are still worth a pass on a day the set is already done.
+                if not self._stop_event.is_set():
+                    human = HumanBehavior(self._driver, show_cursor=True, mobile=False)
+                    self._run_earn_activities(human)
+
             # Run the visual search even if the Daily Set failed or was skipped.
             if not self._stop_event.is_set():
                 self._run_visual_search_if_needed()
-            if not self._stop_event.is_set() and not self._activity_discovery_attempted:
-                self._activity_discovery_attempted = True
-                self._review_activity_discovery(self._driver, source="RUN")
 
         finally:
             try:
@@ -2954,24 +3097,122 @@ class AutoRewarderAPI:
         if len(queries) >= count:
             return queries[:count]
 
-        # Top up from the static file, skipping any query the LLM already
-        # produced. Request extra headroom so de-dup can't leave us short.
+        # Top up from the static file, skipping a query this run already used
+        # and any the LLM just produced. Request extra headroom so de-dup
+        # can't leave us short.
         static = self.search_engine.load_queries_from_json(
-            JSON_FILE_PATH, num_needed=count + len(queries)
+            JSON_FILE_PATH, num_needed=count + len(queries) + len(self._run_queries)
         )
+
+        seen = {q.casefold() for q in self._run_queries}
+        seen.update(q.casefold() for q in queries)
+        spare = [q for q in static if q.casefold() not in seen]
 
         if not queries:
             from .utils import humanize_queries
 
-            return humanize_queries(static)
+            picked = spare[:count] or static[:count]
+            self._run_queries.update(picked)
+            return humanize_queries(picked, self.log)
 
-        seen = set(queries)
-        extra = [q for q in static if q not in seen][: count - len(queries)]
+        extra = spare[: count - len(queries)]
+        self._run_queries.update(extra)
         self.log(
             f"LLM returned {len(queries)}/{count} queries — "
             f"topped up with {len(extra)} static queries."
         )
         return queries + extra
+
+    def _plan_run_queries(self):
+        """
+        Generate the whole run's search queries up front, in varied batches.
+
+        Advanced scheduling otherwise asks the LLM for one query per batch, and
+        a single-query prompt gives the model nothing to vary against: the same
+        topic comes back batch after batch and the day collapses onto a handful
+        of repeated searches (issue #159). So the plan is built once, in chunks
+        of at least `_QUERY_PLAN_BATCH`, each chunk told what was already used;
+        the scheduler then consumes it from `self._query_plan` instead of
+        generating per batch.
+
+        The static pool is interleaved as backup, and the plan is only a
+        preference: if it runs dry, `_build_queries` takes over again.
+        """
+        self._query_plan = []
+        self._run_queries = set()
+
+        cfg = self.global_settings.get_llm_config()
+        if not cfg["use_llm_queries"] or not cfg["llm_api_key"]:
+            return
+
+        total = max(0, int(self._run_planned_total or 0))
+        if total <= 0:
+            return
+
+        locale = resolve_search_locale(self.global_settings.get_settings(), self.log)
+        used = set()
+        planned = []
+
+        chunks = math.ceil(total / self._QUERY_PLAN_BATCH)
+        for index in range(chunks):
+            want = min(self._QUERY_PLAN_BATCH, total - len(planned))
+            if want <= 0:
+                break
+
+            self.log(
+                f"Planning queries {len(planned) + want}/{total} via LLM "
+                f"({cfg['llm_provider']}, {locale})…"
+            )
+            produced = llm.generate_queries(
+                want,
+                locale,
+                provider=cfg["llm_provider"],
+                model=cfg["llm_model"],
+                api_key=cfg["llm_api_key"],
+                base_url=cfg["llm_base_url"],
+                logger=self.log,
+                avoid=used,
+                used=used,
+            )
+            if not produced:
+                self.log(
+                    f"[WARNING] LLM produced no queries for batch "
+                    f"{index + 1}/{chunks} — leaving the rest to the static pool."
+                )
+                break
+            planned.extend(produced)
+
+        if not planned:
+            self.log("[WARNING] LLM query planning failed — using static queries.")
+            return
+
+        self._query_plan = planned[:total]
+        self._run_queries = set(self._query_plan)
+
+        distinct = len({q.casefold() for q in self._query_plan})
+        self.log(
+            f"Planned {len(self._query_plan)} searches up front "
+            f"({distinct} distinct) to keep topics varied across batches."
+        )
+        if distinct < len(self._query_plan):
+            self.log(
+                "[WARNING] The model repeated some planned queries; "
+                "repeats were kept only to reach the configured search count."
+            )
+
+    def _next_planned_queries(self, count):
+        """
+        Take up to `count` queries from the run's pre-generated plan.
+
+        Returns:
+            list: the queries taken (empty when there is no plan or it ran out).
+        """
+        if count <= 0 or not self._query_plan:
+            return []
+
+        taken = self._query_plan[:count]
+        del self._query_plan[: len(taken)]
+        return taken
 
     def _run_visual_search_if_needed(self):
         """
@@ -3175,7 +3416,11 @@ class AutoRewarderAPI:
             f"=== {label} phase — {count} {'queries' if count != 1 else 'query'} ==="
         )
 
-        queries_to_search = self._build_queries(count)
+        queries_to_search = self._next_planned_queries(count)
+        if queries_to_search:
+            self.log(f"{label}: using {len(queries_to_search)} planned query(ies).")
+        else:
+            queries_to_search = self._build_queries(count)
         if not queries_to_search:
             self.log(f"[WARNING] {label}: no queries available. Skipping phase.")
             if self.history is not None:
@@ -3186,6 +3431,16 @@ class AutoRewarderAPI:
 
         self._driver = self.driver_manager.setup_driver(mobile=mobile)
         try:
+            # The daily tasks run after the searches, so check the session now
+            # rather than after twenty minutes of searching a signed-out profile.
+            if do_daily_set:
+                try:
+                    self._driver.get("https://rewards.bing.com/dashboard")
+                except Exception as e:
+                    self.log(f"[WARNING] Could not reach the Rewards dashboard: {e}")
+                if not self._ensure_signed_in(self._driver):
+                    return
+
             done = self.search_engine.perform_searches(
                 self._driver,
                 queries_to_search,
@@ -3247,11 +3502,20 @@ class AutoRewarderAPI:
                     else:
                         self.log("Daily Set failed. Not marked as done for today.")
 
+                # Read to Earn, Explore on Bing and the daily check-in, which
+                # need more than a click. Run beside the Daily Set whether or not
+                # it fully succeeded: they are separate points.
+                if not self._stop_event.is_set():
+                    self._run_earn_activities(human)
+
             elif daily_done and not self._stop_event.is_set():
                 self.log(
                     "Daily Set already completed today. Skipping. "
                     "(Enable 'Force daily tasks' in Settings to run it anyway.)"
                 )
+                # Not covered by the Daily Set marker, so still worth a pass.
+                human = HumanBehavior(self._driver, show_cursor=True, mobile=mobile)
+                self._run_earn_activities(human)
 
             # Visual search runs only in PC phase,
             # do_daily_set=False in Mobile phase.
@@ -3263,13 +3527,6 @@ class AutoRewarderAPI:
             # usable fallback source for the balance.
             if not ran_daily_set and not self._stop_event.is_set():
                 self._try_scrape_balance()
-
-            # The first desktop/mobile phase adds a read-only activity review to
-            # the existing run order. It does not click, search, read, answer,
-            # claim, or otherwise change any Rewards activity.
-            if not self._activity_discovery_attempted and not self._stop_event.is_set():
-                self._activity_discovery_attempted = True
-                self._review_activity_discovery(self._driver, source="RUN")
 
         finally:
             try:

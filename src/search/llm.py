@@ -42,10 +42,19 @@ def _max_tokens(count):
     return min(8192, 512 + count * 30)
 
 
-def _build_prompt(count, loc):
-    """Phrase the generation instruction in the user's language."""
+def _build_prompt(count, loc, avoid=None):
+    """Phrase the generation instruction in the user's language.
+
+    Args:
+        count (int): how many queries to ask for.
+        loc (str): the locale driving the output language.
+        avoid (iterable of str, optional): queries already used recently. They
+            go into the prompt as an explicit do-not-repeat list, because a
+            stateless per-batch call otherwise drifts back to the same handful
+            of topics (issue #159).
+    """
     lang = language_name(loc)
-    return (
+    prompt = (
         f"Generate {count} realistic, varied web search queries that a typical "
         f"person would type into a search engine. Write them in {lang} "
         f"(locale {loc}). Mix everyday topics: news, weather, recipes, sports, "
@@ -54,6 +63,17 @@ def _build_prompt(count, loc):
         f"with no numbering, no quotes and no explanations. "
         f"Return ONLY a JSON array of {count} distinct strings."
     )
+
+    recent = [str(q).strip() for q in (avoid or []) if str(q).strip()]
+    if recent:
+        # A bounded list: long prompts cost tokens and dilute the instruction.
+        listed = "; ".join(recent[-40:])
+        prompt += (
+            f" These queries were already searched recently — do not repeat or "
+            f"paraphrase any of them, and pick different topics: {listed}."
+        )
+
+    return prompt
 
 
 def _http_error_reason(status):
@@ -273,7 +293,15 @@ def _extract_queries(text, count):
 
 
 def generate_queries(
-    count, locale, provider="openai", model="", api_key="", base_url="", logger=None
+    count,
+    locale,
+    provider="openai",
+    model="",
+    api_key="",
+    base_url="",
+    logger=None,
+    avoid=None,
+    used=None,
 ):
     """Generate up to `count` search queries in `locale`'s language via an LLM.
 
@@ -285,6 +313,11 @@ def generate_queries(
         model (str): model id; falls back to the provider default when blank.
         api_key (str): the user's own API key; unused for local Ollama.
         logger (callable, optional): logging function.
+        avoid (iterable of str, optional): queries the answer must not repeat.
+            Also enforced by de-duplication below, so a model that ignores the
+            instruction still can't hand back a query already used.
+        used (set-like, optional): collector the accepted queries are added to,
+            so a later batch in the same run avoids them too.
 
     Returns:
         list[str]: query strings, or ``[]`` on any failure. Never raises.
@@ -306,7 +339,7 @@ def generate_queries(
         return []
 
     model = (model or "").strip() or DEFAULT_MODELS[provider]
-    prompt = _build_prompt(count, locale)
+    prompt = _build_prompt(count, locale, avoid)  # type: ignore[arg-type]
 
     try:
         if provider == "ollama":
@@ -338,6 +371,11 @@ def generate_queries(
         return []
 
     queries = _extract_queries(text, count)
+    if avoid:
+        seen = {str(q).strip().casefold() for q in avoid}
+        queries = [q for q in queries if q.casefold() not in seen]
+    if used is not None:
+        used.update(queries)
     if not queries and logger:
         logger(f"[WARNING] LLM ({provider}) returned no usable queries.")
     return queries

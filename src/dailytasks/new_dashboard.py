@@ -21,6 +21,8 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
+from .earn_activities import classify_earn_kind
+
 DASHBOARD_URL = "https://rewards.bing.com/dashboard"
 EARN_URL = "https://rewards.bing.com/earn"
 
@@ -120,7 +122,14 @@ try {
     if (!m) continue;
     var tEl = a.querySelector('.text-globalBody2Strong') || a.querySelector('p');
     var title = tEl ? (tEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
-    out.push({ destination: href, title: title.slice(0, 80), points: parseInt(m[1], 10) });
+    out.push({
+      destination: href,
+      title: title.slice(0, 80),
+      // Full card text: Read/Explore cards are recognised by it, so that the
+      // generic click pass can leave them to the dedicated earn-activities pass.
+      description: txt.slice(0, 400),
+      points: parseInt(m[1], 10)
+    });
   }
   return out;
 } catch (e) { return []; }
@@ -1048,6 +1057,18 @@ class NewDashboardDailySet:
                 break
             dest = item.get("destination")
             title = item.get("title") or "activity"
+            # Read to Earn and Explore on Bing need more than a click: the first
+            # is credited for time spent reading, the second for opening the
+            # topics inside it. Opening one here for a few seconds would earn
+            # nothing and still count as "done", so they are left to
+            # EarnActivities, which drives each of them properly.
+            kind = classify_earn_kind(title, item.get("description", ""))
+            if kind in ("read", "explore"):
+                self._log(
+                    f"'earn-page': '{title}' is a {kind} activity — "
+                    "handled by the earn-activities pass."
+                )
+                continue
             if not isinstance(dest, str) or not dest.startswith("http"):
                 continue
             self._log(f"Opening activity: {title} (+{item.get('points')})")

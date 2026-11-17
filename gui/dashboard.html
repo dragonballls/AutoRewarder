@@ -201,6 +201,12 @@
       if (ls.daily_cards) parts.push(ls.daily_cards + ' cards');
       if (ls.earn_cards) parts.push(ls.earn_cards + ' earn opened');
       if (ls.quest_tasks) parts.push(ls.quest_tasks + ' quest tasks opened');
+      // A redeemed gift card lowers the real balance; report it as spend so the
+      // session never reads as if it earned a negative number (issue #161).
+      const spend = Number(d.session_balance_change);
+      if (!isNaN(spend) && spend < 0) {
+        parts.push('-' + fmt(Math.abs(spend)) + ' spent');
+      }
       sessSub.textContent = parts.length ? parts.join(' · ') : 'No activity recorded yet';
 
       // Lifetime metrics.

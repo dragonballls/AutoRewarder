@@ -167,7 +167,7 @@ See the [Development Setup](#development-setup-for-developers) section.
 - Optional tab switching between result categories (Images/Videos/News)
 - Natural mouse movement/clicking (W3C Actions/randomized Bezier trajectories)
 - Daily Set task collection (runs once per day, per account)
-- Read-only Rewards activity discovery integrated into Start Run, plus an in-window Test activities check for Read to Earn, Explore on Bing, and other visible activity types
+- Read to Earn, Explore on Bing and the daily check-in, driven to completion and verified against each card's own progress
 - Separate browser profile per account
 - Localization detection (language, region)
 - Simulated human typos in search queries (via nlpaug)
@@ -407,7 +407,7 @@ For common issues and solutions, see the [Troubleshooting](USER_GUIDE.md#trouble
 - [ ] Human typos simulation for different keyboard/language layouts (AZERTY, QWERTZ, etc.)
 - [ ] Human-like typing with random spaces/backspaces
 - [ ] Independent toggle for Visual Search task (for unsupported regions)
-- [ ] Explore on Bing support
+- [x] Explore on Bing support
 - [ ] Region-specific search query datasets (US, UK, CA, AU, IN, etc.)
 - [ ] Keyboard shortcuts
 - [ ] Per-account proxy support

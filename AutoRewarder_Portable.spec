@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 import sys
 import os
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 is_windows = sys.platform == 'win32'
 app_icon = os.path.join('assets', 'icon.ico') if is_windows else os.path.join('assets', 'icon.png')
@@ -17,11 +17,39 @@ if is_windows:
 else:
     hidden_imports += ['PySide6', 'gi']
 
+
+def optional_data_files(package):
+    """Data files of an optional dependency; empty when it isn't installed."""
+    try:
+        return collect_data_files(package)
+    except Exception:
+        print(f"[spec] {package} data files unavailable; building without them.")
+        return []
+
+
+def optional_metadata(package):
+    """Distribution metadata of an optional dependency; empty when unavailable.
+
+    nlpaug reads package metadata at import time and raises PackageNotFoundError
+    when it is absent. The portable build is a --onefile bundle, so it needs the
+    same metadata the installed build collects or the static-query fallback
+    crashes there too (issue #160).
+    """
+    try:
+        return copy_metadata(package)
+    except Exception:
+        print(f"[spec] {package} metadata unavailable; building without it.")
+        return []
+
+
 a = Analysis(
     ['AutoRewarder.py'],
     pathex=[],
     binaries=[],
-    datas=[('gui', 'gui'), ('assets', 'assets')] + collect_data_files('nlpaug'),
+    datas=[('gui', 'gui'), ('assets', 'assets')]
+        + optional_data_files('nlpaug')
+        + optional_metadata('gdown')
+        + optional_metadata('nlpaug'),
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},

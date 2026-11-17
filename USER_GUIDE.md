@@ -16,6 +16,7 @@ Welcome! This guide will help you get started with AutoRewarder and explain all 
 ### Using AutoRewarder
 - [Starting a Session](#starting-a-session)
 - [Daily tasks only](#daily-tasks-only)
+- [Testing one task at a time](#testing-one-task-at-a-time)
 - [Visual Search](#visual-search)
 - [What's Happening?](#whats-happening)
 
@@ -133,8 +134,7 @@ Adding another account is slightly different, so please follow these steps:
 - It may take short "coffee breaks" during longer sessions
 - If Schedule is enabled and Advanced scheduling is on, the run is paced across the schedule duration using the queries-per-hour target. You will see a clear "Done!" message in the logs when the advanced scheduling run fully completes.
 - After the PC phase, it attempts the visible Daily Set + "More Activities" actions. A Daily Set is marked complete only after a fresh dashboard read verifies every original actionable card is complete; otherwise it remains eligible for retry.
-- After the existing daily-task and Visual Search steps, it makes one read-only pass over the Rewards dashboard and /earn page to identify Read to Earn, Explore on Bing, and other visible activity types. Results appear in the Activity log for you to review and complete yourself.
-- The activity-discovery pass does not open activity cards, run searches, read articles, answer quizzes or polls, or claim points.
+- It then completes the three earn-page activities that a single click cannot finish: **Read to Earn** (the article is opened and read for long enough to be credited), **Explore on Bing** (the topics inside the card are opened in turn), and the **daily check-in** (claimed once a day). Each is confirmed by re-reading the card's own progress afterwards, and anything that does not advance is logged rather than counted.
 - Visual Search is attempted after the PC phase. The app marks it complete only when Rewards progress increases from a recorded pre-run baseline; otherwise it reports that credit could not be verified and leaves it unmarked.
 - The process continues until all searches are complete, or until you click **Stop**
 - You'll see updates in the log window
@@ -143,15 +143,31 @@ If a new version is available, AutoRewarder can show an update notification and 
 
 ### Daily tasks only
 
-If you've already done your searches manually (or just want to clean up the dashboard quickly), enable the **"Daily tasks only"** toggle before starting. The run skips both Bing search phases and opens the Rewards dashboard to attempt the Daily Set/More Activities actions and Visual Search. Unverified work is not recorded as complete.
+If you've already done your searches manually (or just want to clean up the dashboard quickly), enable the **"Daily tasks only"** toggle before starting. The run skips both Bing search phases and opens the Rewards dashboard to attempt the Daily Set/More Activities actions, Read to Earn, Explore on Bing, the daily check-in and Visual Search. Unverified work is not recorded as complete. Read to Earn, Explore and the check-in still run on a day whose Daily Set is already done, because they are separate points.
 
 Anything already marked as done for today is skipped, and the log says so — see [Force daily tasks & visual search](#force-daily-tasks--visual-search) to run it again anyway.
 
-### Testing activity discovery
+### Testing one task at a time
 
-Use the **Test activities** button beside **Start run** to check whether the current account's Rewards dashboard exposes recognizable activity cards. It uses the selected account's Edge profile in headless mode, so it does not open another visible browser or application window. Results are written to the existing Activity log.
+**Test one task** beside **Start run** opens a list of every earning task the app can perform, runs only the one you pick, and tells you what the page confirmed:
 
-The test does not complete activities. A zero-result scan means no matching cards were recognized at that moment; check that the account is signed in and remember that Microsoft's dashboard layout and available activities can change.
+| Result | What it means |
+| --- | --- |
+| **verified** | The task ran *and* Rewards showed the work counted — the card's progress moved, or its success badge appeared. |
+| **ran, not verified** | The task executed without error, but Rewards did not confirm it. Worth a second look: it may have been already done, or the offer may not be available today. |
+
+Testing **never marks a day as done**, so it is safe to use before your real run. Testing Read to Earn in the morning will not make the evening run skip the Daily Set.
+
+The ten tasks are: Daily Set, Pending points claim, More Activities, Quests/punchcards, Read to Earn, Explore on Bing, Daily check-in, Visual Search, PC searches, and Mobile searches.
+
+From a terminal you can do the same without the window:
+
+```bash
+python AutoRewarder.py --list-tasks
+python AutoRewarder.py --test-task read_to_earn --account Alice
+```
+
+Two tasks cannot be fully confirmed this way, and the app says so rather than pretending: the **pending points claim** (Rewards does not report a claim in the page — check your balance) and **searches** (a search submits fine even when Rewards does not count it — watch your points total).
 
 ### Visual Search
 
