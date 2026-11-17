@@ -55,11 +55,12 @@ if __name__ == "__main__":
     # load a marked assembly with "Failed to resolve
     # Python.Runtime.Loader.Initialize". Clear the mark first, while the only
     # cost is a few stat calls.
-    from src.clr_support import ensure_managed_runtime_loadable
-
     # The window does not exist yet, so the message is logged once the API can
     # report it; the unblocking itself happens before webview is imported.
-    unblocked_clr_files = ensure_managed_runtime_loadable()
+    from src.clr_support import describe_unblock, unblock_bundled_files
+
+    _cleared, _still_marked = unblock_bundled_files()
+    unblock_message = describe_unblock(_cleared, _still_marked)
 
     import webview
 
@@ -78,11 +79,8 @@ if __name__ == "__main__":
     )
     api.set_window(window)  # pass window reference to AutoRewarderAPI for logging
 
-    if unblocked_clr_files:
-        api.log(
-            "Windows had marked the bundled .NET files as downloaded from the "
-            f"Internet; unblocked {len(unblocked_clr_files)} so the app can start."
-        )
+    if unblock_message:
+        api.log(unblock_message)
 
     # Secondary windows (History, Statistics) are independent pywebview windows.
     # pywebview keeps the process alive as long as ANY window is open, so once
