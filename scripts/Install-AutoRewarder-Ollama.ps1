@@ -286,6 +286,27 @@ if (Test-Path -LiteralPath $InstallPath -PathType Container) {
 New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
 Copy-Item -Path (Join-Path $appSource "*") -Destination $InstallPath -Recurse -Force
 
+# Windows marks every file unpacked from a downloaded ZIP as coming from the
+# Internet, and .NET refuses to load a marked assembly. A marked exe fails
+# before any app code runs, so this cannot be repaired from inside the app -
+# it has to happen here, on the whole tree, before the exe is ever started.
+Write-Step "Unblock the copied files"
+$blocked = @(Get-ChildItem -LiteralPath $InstallPath -File -Recurse -Force -ErrorAction SilentlyContinue |
+    Where-Object { (Get-Item -LiteralPath $_.FullName -Stream * -ErrorAction SilentlyContinue).Stream -contains "Zone.Identifier" })
+foreach ($file in $blocked) {
+    Unblock-File -LiteralPath $file.FullName -ErrorAction SilentlyContinue
+}
+if ($blocked.Count -gt 0) {
+    $remaining = @(Get-ChildItem -LiteralPath $InstallPath -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object { (Get-Item -LiteralPath $_.FullName -Stream * -ErrorAction SilentlyContinue).Stream -contains "Zone.Identifier" })
+    if ($remaining.Count -gt 0) {
+        throw "Windows still marks $($remaining.Count) copied file(s) as downloaded, which stops .NET from loading them. Move the install to a writable folder, or tick Unblock in the ZIP's Properties, then run this script again. The app was not launched."
+    }
+    Write-Host "Cleared the download marker from $($blocked.Count) file(s)."
+} else {
+    Write-Host "No files carried the download marker."
+}
+
 # The build is packaged without a config folder so the old standard data path is reused.
 $unexpectedConfig = Join-Path $InstallPath "config"
 if (Test-Path -LiteralPath $unexpectedConfig) {
