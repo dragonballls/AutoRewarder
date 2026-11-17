@@ -12,12 +12,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check the badge secrets are configured
+        id: secrets
+        env:
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          # This workflow writes badge JSON into a gist owned by the upstream
+          # project. A fork without those secrets cannot update it, and failing
+          # every twelve hours says nothing useful; skip and say so instead.
+          if [ -z "$GIST_ID" ] || [ -z "$GIST_TOKEN" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Badge secrets (GIST_ID, GIST_TOKEN) are not set on this repository, so the badges cannot be updated. Add them, or ignore this scheduled run."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python
+        if: steps.secrets.outputs.configured == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Run script
+        if: steps.secrets.outputs.configured == 'true'
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
