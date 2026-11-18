@@ -422,14 +422,35 @@ def main():
         action="store_true",
         help="List the earning tasks that --test-task can run.",
     )
+    parser.add_argument(
+        "--daily-first",
+        action="store_true",
+        help="Bank the Daily Set before the search queries (overrides the saved order).",
+    )
+    parser.add_argument(
+        "--searches-first",
+        action="store_true",
+        help="Run the search queries before the Daily Set (overrides the saved order).",
+    )
     args = parser.parse_args()
 
     if args.pc is not None and args.pc < 0:
         parser.error("--pc must be >= 0")
     if args.mobile is not None and args.mobile < 0:
         parser.error("--mobile must be >= 0")
+    if args.daily_first and args.searches_first:
+        parser.error("--daily-first and --searches-first cannot both be set")
 
     api = _create_headless_api()
+
+    if args.daily_first or args.searches_first:
+        # Runtime only: a scheduled run must not persist a preference the person
+        # never set. Without either flag the saved setting decides.
+        api.daily_first = bool(args.daily_first)
+        console_log(
+            "Daily Set order: "
+            f"{'before' if api.daily_first else 'after'} the search queries."
+        )
 
     if args.list_tasks:
         for spec in api.list_testable_tasks():

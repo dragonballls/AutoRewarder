@@ -40,9 +40,30 @@ class HumanizeQueriesFallbackTests(unittest.TestCase):
     def test_unavailable_nlpaug_is_reported_to_the_logger(self):
         messages = []
         with mock.patch("builtins.__import__", side_effect=ImportError("no nlpaug")):
-            humanize_queries(["a query"], messages.append)
+            humanize_queries(["a query"], messages.append, enabled=True)
         self.assertTrue(messages)
         self.assertIn("nlpaug", messages[0])
+
+    def test_typos_are_off_unless_asked_for(self):
+        """
+        The fallback must search what it was given. A corrupted query is a
+        search for something nobody meant: it returns nothing and wastes one of
+        the day's searches, which is how "national lam9oons loaded weapon"
+        reached a real run.
+        """
+        queries = ["national lampoons loaded weapon"] * 20
+
+        class AlwaysAugments:
+            def augment(self, query):
+                return ["national lam9oons loaded weapon"]
+
+        with mock.patch(
+            "src.utils._build_keyboard_augmenter", return_value=AlwaysAugments()
+        ):
+            self.assertEqual(humanize_queries(queries), queries)
+            # And on request it still does what it says.
+            changed = humanize_queries(queries, enabled=True)
+        self.assertIn("national lam9oons loaded weapon", changed)
 
     def test_constructor_failure_is_also_survivable(self):
         """A frozen build whose nlpaug metadata is missing raises on import."""

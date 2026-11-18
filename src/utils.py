@@ -97,27 +97,43 @@ def _build_keyboard_augmenter():
         return None
 
 
-def humanize_queries(queries, logger=None):
+def humanize_queries(queries, logger=None, enabled=False):
     """
-    Substitute character by keyboard distance to simulate human typing errors.
+    Optionally introduce a keyboard-distance typo, as a person would.
 
-    This sits on the static-query fallback, which is exactly the path taken when
-    LLM query generation fails — so it must never raise. A missing typo engine
-    degrades to the queries as they are: the run still collects its searches.
+    Off by default, and that default is the fix for a visible bug. This sits on
+    the static-query fallback — the path taken whenever LLM generation fails —
+    and it corrupts roughly one query in five. A corrupted query is not a
+    harmless human touch: it is a search for something nobody meant, which
+    returns nothing, wastes one of the day's searches, and looks like a fault:
+
+        national lam9oons loaded weapon
+
+    "National Lampoons loaded weapon" with a typo is exactly what the person saw
+    and reported. A typo is only worth making when the person asks for it, so
+    this must be switched on rather than land in the middle of a fallback.
 
     Args:
         queries (list): A list of query strings.
         logger (callable, optional): Logger used to report a skipped pass.
+        enabled (bool): introduce typos. Default False: search the queries as
+            written.
+
     Returns:
-        humanized_queries (list): Modified query strings with simulated typing
-        errors, or the queries unchanged when nlpaug is unavailable.
+        list: the queries, with a simulated typo in some of them when enabled.
+        Any failure (a missing typo engine, a bad augment) returns the queries
+        unchanged — this must never raise, since the fallback is what runs when
+        something else has already gone wrong.
     """
+    if not enabled:
+        return list(queries)
+
     mod = _build_keyboard_augmenter()
 
     if mod is None:
         message = (
-            "[WARNING] Skipping query humanizing — the nlpaug typo engine is "
-            "unavailable. Searching the queries as-is."
+            "[WARNING] Typo simulation is on but the nlpaug engine is "
+            "unavailable. Searching the queries as written."
         )
         if logger:
             logger(message)

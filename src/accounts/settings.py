@@ -133,6 +133,12 @@ class GlobalSettingsManager:
             # failed after being marked as done).
             "force_daily_tasks": False,
             "force_visual_search": False,
+            # Run the Daily Set (and the earn-page tasks that go with it) before
+            # the search queries instead of after. The searches take a long time
+            # — tens of minutes for a full day — and a browser or driver failure
+            # partway through used to lose the Daily Set points as well, which
+            # are worth a streak. On by default: the fixed points come first.
+            "daily_first": True,
             # Default query counts.
             "queries_pc": 30,
             "queries_mobile": 20,
@@ -153,6 +159,11 @@ class GlobalSettingsManager:
             # Delay range for normal manual searches
             "manual_search_delay_min": 4.0,
             "manual_search_delay_max": 10.0,
+            # Add a keyboard typo to some static fallback queries, to look like
+            # a person typing. Off by default: a garbled query searches for
+            # something nobody meant and earns nothing, and this path is the one
+            # taken whenever LLM query generation fails.
+            "simulate_typos": False,
             # For github star toast
             # Prompt after 2 successful runs, and only once.
             "successful_runs": 0,
@@ -282,6 +293,42 @@ class GlobalSettingsManager:
     def get_queries_pc(self):
         """Return the saved PC queries count from settings."""
         return self.get_settings().get("queries_pc", 30)
+
+    def get_daily_first(self):
+        """
+        Whether the Daily Set runs before this run's search queries.
+
+        Returns:
+            bool: True when the fixed daily points are banked first.
+        """
+        return bool(self.get_settings().get("daily_first", True))
+
+    def get_simulate_typos(self):
+        """
+        Whether fallback queries get a deliberate keyboard typo.
+
+        Off by default: a corrupted query searches for something nobody meant,
+        which earns nothing and wastes one of the day's searches.
+
+        Returns:
+            bool: True when the person has asked for typos.
+        """
+        return bool(self.get_settings().get("simulate_typos", False))
+
+    def set_daily_first(self, enabled):
+        """
+        Persist whether the Daily Set runs before the search queries.
+
+        Args:
+            enabled (bool): True to bank the Daily Set before searching.
+
+        Returns:
+            bool: True once saved.
+        """
+        settings = self.settings_for_update()
+        settings["daily_first"] = bool(enabled)
+        self.save_settings(settings)
+        return True
 
     def set_queries_pc(self, count):
         """Persist the PC queries count in settings."""

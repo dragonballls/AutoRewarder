@@ -76,21 +76,48 @@ class MobileOnlyDesktopTaskPassTests(unittest.TestCase):
 
     def test_the_task_only_pass_performs_no_searches(self):
         phase = _method("_run_phase")
-        # Searches are guarded, so count=0 cannot reach perform_searches.
-        self.assertIn("if queries_to_search:", phase)
+        # Searches live in their own block, guarded so count=0 cannot reach them.
+        self.assertIn("def run_searches_block", phase)
+        self.assertIn("if self._stop_event.is_set() or not queries_to_search:", phase)
         self.assertIn("queries_to_search = []", phase)
 
-    def test_the_task_only_pass_keeps_every_desktop_task(self):
+    def test_the_daily_tasks_come_before_the_search_block_by_default(self):
+        """
+        The order is picked, not fixed: the searches take tens of minutes and a
+        failure partway through used to lose the Daily Set with them.
+        """
         phase = _method("_run_phase")
-        ordered = _positions(
-            phase,
-            [
-                "self.daily_set.perform_daily_set(",
-                "self._run_earn_activities(human)",
-                "self._run_visual_search_if_needed()",
-            ],
+        self.assertIn("def run_daily_set_block", phase)
+        self.assertIn("def run_searches_block", phase)
+        self.assertIn("daily_first = do_daily_set and self.get_daily_first()", phase)
+        # The daily-first branch runs the tasks first and the searches second.
+        start = phase.index("if daily_first:")
+        branch = phase[start:]
+        self.assertLess(
+            branch.index("run_daily_set_block()"), branch.index("run_searches_block()")
         )
-        self.assertEqual(ordered, sorted(ordered))
+
+    def test_the_task_only_pass_keeps_every_desktop_task(self):
+        """
+        A phase that only does tasks still does all three: the Daily Set, the
+        earn-page tasks, then the visual search.
+        """
+        phase = _method("_run_phase")
+        block_start = phase.index("def run_daily_set_block")
+        block_end = phase.index("daily_first =")
+        daily_block = phase[block_start:block_end]
+        self.assertIn("self.daily_set.perform_daily_set(", daily_block)
+        self.assertIn(
+            "self._run_earn_activities(human)",
+            daily_block,
+            "the earn-page tasks must still run beside the Daily Set",
+        )
+        # And the visual search still runs once both blocks have had their turn.
+        self.assertGreater(
+            phase.index("self._run_visual_search_if_needed()"),
+            phase.index("if daily_first:"),
+            "the visual search runs after the phase's blocks, not inside them",
+        )
 
     def test_the_earn_pass_still_covers_read_explore_and_check_in(self):
         # The three earn-page tasks are owned by the runner, reached through
