@@ -1,20 +1,25 @@
 """Activities that earn points by being *used*, not merely opened.
 
-The Daily Set, "More Activities" cards and quests are handled by
-`NewDashboardDailySet`, which clicks a card and trusts the page to credit it.
-Three Microsoft Rewards tasks don't work that way:
+Two kinds of earning live here, and they work differently.
 
-  * **Read to Earn** — credit depends on actually reading: an article has to be
-    opened and scrolled through for long enough. A three-second click opens it
-    and earns nothing.
-  * **Explore on Bing** — the card opens a topic hub; the topics inside it have
-    to be opened in turn before the card's progress advances.
-  * **Daily check-in** — a one-shot claim that has to be *clicked*, and only
-    exists once per day.
+**Paid for by the report.** "More Activities" cards, the Daily Set and quests are
+one offer each, and Rewards records the credit when the activity is reported.
+Send the report, re-read the offer list, and count it only if its progress moved.
 
-Each is driven to completion here and then re-read from the page, so "done" is
-reported only when the card's own progress says so. Nothing is claimed on the
-strength of a click alone.
+**Paid for by being used.** Three tasks are not credited for a bare report:
+
+  * **Read to Earn** — an article has to be opened and read before the report
+    that claims it means anything. A report sent first is answered "accepted"
+    and credits nothing, which is why this pass used to find a card and still
+    never complete it.
+  * **Explore on Bing** — the topics inside the card have to be opened, then the
+    card claimed.
+  * **Daily check-in** — a one-shot claim, once a day.
+
+So Read and Explore run use → claim → verify, repeated while the offer needs
+more reads or topics, and every count comes from the card's own progress rather
+than from the pass's opinion of itself. The click-driven passes below remain for
+a site whose offer list cannot be read at all.
 
 Everything the module needs is passed in: it never imports the account layer, so
 it can be exercised with a fake driver.
@@ -67,6 +72,11 @@ _CHECK_IN_PATTERNS = (
     r"\bcheck\s*-?\s*in\b",
     r"\bdaily\s+check\s*-?\s*in\b",
 )
+
+# How many times an activity Rewards pays for by being used is repeated. Read to
+# Earn needs one read per step, and a card is a handful of steps; this is a guard
+# against a card that never advances, not a target.
+_MAX_USE_CYCLES = 6
 
 # Read the candidate cards from the two earn sections, plus any card anywhere on
 # the page whose own text names one of the three activities (the dashboard does
@@ -293,6 +303,27 @@ def offer_earn_kind(offer):
         return "explore"
 
     return classify_earn_kind(offer.get("title") or "")
+
+
+def _offer_done(offer):
+    """
+    Whether an offer is finished, as the offer list says it.
+
+    Rewards usually flips `complete` when the last step lands, but a card whose
+    progress has reached its maximum is finished even if the flag has not caught
+    up yet — the same rule `credit_moved` uses to call a report a success.
+    """
+    if not isinstance(offer, dict):
+        return False
+    if offer.get("complete"):
+        return True
+    progress, maximum = offer.get("progress"), offer.get("maximum")
+    return (
+        isinstance(progress, int)
+        and isinstance(maximum, int)
+        and maximum > 0
+        and progress >= maximum
+    )
 
 
 def _parse_progress(value):
@@ -674,20 +705,25 @@ class EarnActivities:
         Complete Read to Earn, Explore on Bing and the daily check-in, and count
         only what Rewards confirms.
 
-        The report is the part that actually pays: each activity is one offer in
-        Rewards' own list, and Rewards records the credit from the report rather
-        than from the page you land on. That is why every earlier version of
-        these passes reported "done" while earning nothing.
+        Two different things are called "earning" here, and they need opposite
+        orders.
 
-        Read to Earn and Explore are then given a second chance: if the report
-        did not move them, the page-driven pass below runs for exactly those
-        offers and the offer list is read again afterwards. Both mechanisms are
-        therefore tried, and neither is believed without the card's own progress
-        or the balance moving.
+        The check-in, the Daily Set and an ordinary offer are paid for by the
+        report itself, so reporting is the whole action: send it, re-read, and
+        count the offer only if it moved.
+
+        Read to Earn and Explore on Bing pay for being **used**. The report does
+        not perform the activity, it claims one that has already happened — so
+        the article has to be read first, or the topic opened, and only then is
+        the report sent. For an offer that needs three reads there are three of
+        those cycles. Doing it the other way round is what this pass used to do:
+        send a report at progress 0, be told "accepted", watch nothing move, and
+        report a card it had found as one it could not complete.
 
         Args:
             driver: Selenium WebDriver on a signed-in Rewards profile.
-            human: used only by the page fallback for Read/Explore.
+            human: required to perform Read/Explore; without it those two are
+                claimed but not performed, which credits nothing.
             stop_event (threading.Event, optional): aborts between reports.
 
         Returns:
@@ -727,25 +763,20 @@ class EarnActivities:
 
             plural = "offer" if len(todo) == 1 else "offers"
             self._log(f"{label}: {len(todo)} {plural} to earn.")
-            result = self._earner.earn(todo, stop_event=stop_event)
-            totals[kind] = int(result.get("verified", 0) or 0)
 
-            if totals[kind]:
-                continue
-
-            # The report was accepted but moved nothing. For the two activities
-            # Rewards also pays for by use, run the page pass for these offers
-            # and read the list again — the only way to know it worked.
             if kind in ("read", "explore") and human is not None:
-                if self._stopped(stop_event):
-                    break
-                self._log(
-                    f"[INFO] {label}: the report did not advance it; trying the "
-                    "page pass before giving up."
+                # These two pay for being *used*: Rewards credits an article
+                # that was read and a topic that was opened, then pays when the
+                # activity is claimed. So the order is use → claim → verify, and
+                # for an offer that needs several reads the three repeat. Firing
+                # one report first and only then reading was backwards, and it is
+                # why a card could be found and still never complete.
+                totals[kind] = self._earn_by_use(
+                    driver, human, kind, label, page_runner, stop_event
                 )
-                totals[kind] = self._page_fallback(
-                    driver, human, kind, pending, page_runner, stop_event
-                )
+            else:
+                result = self._earner.earn(todo, stop_event=stop_event)
+                totals[kind] = int(result.get("verified", 0) or 0)
 
             if not totals[kind]:
                 self._log(
@@ -762,38 +793,135 @@ class EarnActivities:
         )
         return dict(totals)
 
-    def _page_fallback(self, driver, human, kind, pending, runner, stop_event):
+    def _offers_of_kind(self, kind):
+        """The pending offers of one activity, from the model last read."""
+        return [
+            offer
+            for offer in self._earner.offers()
+            if offer_earn_kind(offer) == kind and not _offer_done(offer)
+        ]
+
+    def _earn_by_use(self, driver, human, kind, label, runner, stop_event):
         """
-        Run the page pass for one activity, then verify it from the offer list.
+        Earn an activity Rewards pays for by being used: use it, claim it, check.
+
+        Read to Earn and Explore on Bing are not paid for a bare report — the
+        report claims what was already done. So each cycle opens the activity on
+        the earn page (reading an article, opening a topic), asks Rewards to
+        claim it, and re-reads the offer list. An offer needing several reads
+        takes several cycles, which is why this repeats until it completes or
+        stops moving.
+
+        Args:
+            driver: Selenium WebDriver on a signed-in Rewards profile.
+            human: HumanBehavior, for the clicking and scrolling.
+            kind (str): "read" or "explore".
+            label (str): the name to put in the log.
+            runner (callable): the page pass that performs the activity.
+            stop_event (threading.Event, optional): aborts between cycles.
 
         Returns:
-            int: offers Rewards now reports as complete, that were not before.
+            int: offers of this kind Rewards now says are complete.
         """
-        before = [offer["offer_id"] for offer in pending if not offer.get("complete")]
-        try:
-            runner(driver, human, stop_event=stop_event)
-        except Exception as e:
+        completed_before = {
+            offer["offer_id"]
+            for offer in self._earner.offers()
+            if offer_earn_kind(offer) == kind and _offer_done(offer)
+        }
+
+        for cycle in range(1, _MAX_USE_CYCLES + 1):
             if self._stopped(stop_event):
+                break
+            pending = self._offers_of_kind(kind)
+            if not pending:
+                break
+
+            if cycle == 1:
+                self._log(f"{label}: earning it by use, then claiming it.")
+            else:
+                self._log(f"{label}: still open, going again ({cycle}).")
+
+            before = {offer["offer_id"]: offer.get("progress") for offer in pending}
+
+            # 1. Use it. This is the part Rewards wants to have happened — the
+            #    article read, the topic opened — before the report claims it.
+            #    One pass per cycle: this loop is the repetition, so the pass
+            #    must not run its own, or one read becomes five.
+            if not self._open_earn_page(driver):
+                self._log(f"[WARNING] {label}: could not open the earn page.")
                 return 0
-            self._log(f"[WARNING] {kind} page pass failed: {type(e).__name__}: {e}")
+            try:
+                runner(driver, human, stop_event=stop_event, once=True)
+            except TypeError:
+                # A pass that does not take `once` is not ours to repeat.
+                try:
+                    runner(driver, human, stop_event=stop_event)
+                except Exception as e:
+                    if self._stopped(stop_event):
+                        break
+                    self._log(
+                        f"[WARNING] {label} page pass failed: {type(e).__name__}: {e}"
+                    )
+            except Exception as e:
+                if self._stopped(stop_event):
+                    break
+                self._log(
+                    f"[WARNING] {label} page pass failed: {type(e).__name__}: {e}"
+                )
 
-        self._earner.refresh()
-        after = {offer["offer_id"]: offer for offer in self._earner.offers()}
-        confirmed = 0
-        for offer_id in before:
-            offer = after.get(offer_id)
-            if offer is None:
-                # Gone from the list. That is what a finished offer can look
-                # like, but it is also what a partial read looks like, and only
-                # one of those is credit. Do not claim it.
-                continue
-            if offer.get("complete"):
-                confirmed += 1
-        return confirmed
+            if self._stopped(stop_event):
+                break
 
-    def run_read_to_earn(self, driver, human, stop_event=None):
+            # 2. Claim it. The report is what records the credit, and it is sent
+            #    after the use rather than before: a report for an activity that
+            #    has not happened is answered "accepted" and credits nothing,
+            #    which is the response this whole pass used to be fooled by.
+            #    The list is re-read first so the report carries a live `hash`.
+            self._earner.refresh()
+            claimable = [
+                offer for offer in self._offers_of_kind(kind) if is_reportable(offer)
+            ]
+            if claimable:
+                self._earner.earn(claimable, stop_event=stop_event)
+
+            # 3. Believe only the offer list, and only a counter that moved.
+            self._earner.refresh()
+            remaining = self._offers_of_kind(kind)
+            if not remaining:
+                break
+
+            moved = any(
+                offer.get("progress") != before.get(offer["offer_id"])
+                for offer in remaining
+            )
+            if not moved:
+                # Another round would read the same article to the same effect.
+                # Say so, rather than looping until the cap.
+                self._log(
+                    f"[INFO] {label}: the activity did not advance the offer, so "
+                    "another round would not either."
+                )
+                break
+
+        after = {
+            offer["offer_id"]
+            for offer in self._earner.offers()
+            if offer_earn_kind(offer) == kind and _offer_done(offer)
+        }
+        return len(after - completed_before)
+
+    def run_read_to_earn(self, driver, human, stop_event=None, once=False):
         """
         Complete every pending Read to Earn card.
+
+        Args:
+            driver: Selenium WebDriver on a signed-in Rewards profile.
+            human: HumanBehavior, for the clicking and scrolling.
+            stop_event (threading.Event, optional): aborts between reads.
+            once (bool): read each card a single time and stop, leaving the
+                repetition to the caller. `run_by_report` cycles read → claim →
+                verify itself, so having this loop as well would read every
+                article several times over.
 
         Returns:
             int: cards whose progress advanced after reading.
@@ -817,6 +945,8 @@ class EarnActivities:
             title = card.get("title") or "Read to Earn"
             before_done, before_total = _parse_progress(card.get("progress"))
             readings = max(1, (before_total or 1) - (before_done or 0))
+            if once:
+                readings = 1
 
             # A card asking for 3 reads needs the article opened 3 times, so the
             # loop is driven by the counter rather than by one attempt per card.
@@ -996,9 +1126,9 @@ class EarnActivities:
         point is to collect every point available today.
 
         The report pass runs first and, when Rewards' offer list answers, it is
-        the whole job: the page-driven passes below are what the app used to do,
-        and none of them can tell whether anything was credited. They stay for a
-        site whose offer list cannot be read.
+        the whole job — including reading the articles Read to Earn needs. The
+        page-driven passes below stay for a site whose offer list cannot be read;
+        they can open a card but cannot tell whether anything was credited.
 
         Args:
             driver: Selenium WebDriver on a signed-in Rewards profile.
