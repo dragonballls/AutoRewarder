@@ -10,7 +10,7 @@ import os
 import platform
 import sys
 
-CURRENT_VERSION = "v4.7"
+CURRENT_VERSION = "v4.8"
 # The repository this build updates *from*: the maintainer's own fork, which is
 # where releases for this edition are published. Pointing this at upstream made
 # the updater compare against a release that does not contain these features, so
