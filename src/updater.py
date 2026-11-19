@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import zipfile
 
 import requests
@@ -58,6 +59,54 @@ _EXE_NAME = {"Windows": "AutoRewarder.exe", "Linux": "AutoRewarder"}
 _ARCHIVE_ROOT = {"Windows": "AutoRewarder", "Linux": "AutoRewarder"}
 
 _CHUNK = 256 * 1024
+
+# What the swap helper leaves behind: a plain-text record of what it did, and a
+# one-line status the next start reads to tell the person whether the update
+# landed. Both live beside the install, or in the temp directory when that is
+# not writable.
+_LOG_NAME = ".autorewarder-update.log"
+
+
+def update_status_path(target):
+    """The status file the helper writes for one install."""
+    return os.path.join(
+        os.path.dirname(os.path.abspath(target)), ".autorewarder-update.status"
+    )
+
+
+def read_update_status(target):
+    """
+    What the last update attempt reported, if anything.
+
+    This is how "the app updated but nothing changed" becomes an answer instead
+    of a mystery: the helper's last word is read on the next start.
+
+    Args:
+        target (str): the folder the app is installed in.
+
+    Returns:
+        dict | None: {"ok": bool, "message": str}, or None when there is no
+        status from a previous attempt.
+    """
+    path = update_status_path(target)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            line = handle.read().strip()
+    except OSError:
+        return None
+    if not line:
+        return None
+    return {"ok": line.casefold().startswith("ok"), "message": line}
+
+
+def clear_update_status(target):
+    """Remove the last attempt's status, once it has been reported."""
+    try:
+        os.unlink(update_status_path(target))
+    except OSError:
+        pass
 
 
 def current_platform():
@@ -261,7 +310,12 @@ def unpack(archive_path, destination, platform_name=None):
         tuple: (folder, error) — folder is the unpacked app, or None.
     """
     kind = unpack_kind(platform_name)
-    os.makedirs(destination, exist_ok=True)
+    try:
+        os.makedirs(destination, exist_ok=True)
+    except OSError as e:
+        # A folder that cannot be created is a failure the caller reports, not a
+        # traceback after a 300 MB download.
+        return None, f"could not make a place to unpack it: {str(e)[:120]}"
 
     try:
         if kind == "zip":
@@ -297,25 +351,54 @@ def unpack(archive_path, destination, platform_name=None):
     return candidate, ""
 
 
-def _swap_script_windows(pid, staged, target, exe):
+def _swap_script_windows(pid, staged, target, exe, log_path=None):
     """
     The PowerShell that finishes an update after this process exits.
 
     Kept as a string so it can be inspected and tested; it is written to a
     temporary file and started hidden.
 
-    Two things it must get right:
+    What it has to get right, learned from an update that reported success and
+    installed nothing:
 
-      * wait for this process, because Windows will not replace a running
+      * **wait** for this process, because Windows will not replace a running
         executable;
-      * an install under Program Files needs administrator rights to write. The
-        copy is tried first, and only if it is refused does it ask Windows for
-        elevation — a UAC prompt is a real question, unlike a console window.
+      * **elevate** when the install is somewhere only an administrator may
+        write, and pass the script path quoted — an install under a user name
+        with a space in it made the elevated copy fail to start at all;
+      * **check robocopy's exit code**. `$ErrorActionPreference = 'Stop'` does
+        not act on a native program's exit code, so a refused copy used to fall
+        through to the restart: the app reopened on the old version and looked
+        like it had simply ignored the update;
+      * **say what happened** in a log beside the install, because the window
+        has already closed by the time any of this runs;
+      * **start the new copy** only when the copy is really there.
     """
+    log_path = log_path or os.path.join(
+        os.path.dirname(os.path.abspath(target)), _LOG_NAME
+    )
+    state_path = update_status_path(target)
     return f"""$ErrorActionPreference = 'Stop'
 $source = {json.dumps(staged)}
 $target = {json.dumps(target)}
 $exe    = {json.dumps(exe)}
+$log    = {json.dumps(log_path)}
+$state  = {json.dumps(state_path)}
+
+function Write-Log($message) {{
+  try {{
+    $line = ('{{0:yyyy-MM-dd HH:mm:ss}}  {{1}}' -f (Get-Date), $message)
+    Add-Content -LiteralPath $log -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+  }} catch {{ }}
+}}
+
+function Write-Status($status) {{
+  # The new copy reads this on start-up and can tell the person what happened,
+  # which is the only way they ever learn why an update did not land.
+  try {{
+    Set-Content -LiteralPath $state -Value $status -Encoding UTF8 -ErrorAction SilentlyContinue
+  }} catch {{ }}
+}}
 
 function Test-Writable($path) {{
   try {{
@@ -326,52 +409,137 @@ function Test-Writable($path) {{
   }} catch {{ return $false }}
 }}
 
+$elevated = $false
+foreach ($arg in $args) {{ if ($arg -eq '-Elevated') {{ $elevated = $true }} }}
+
 if (-not (Test-Writable $target)) {{
-  # Installed somewhere only an administrator may write. Ask for that, once,
-  # and let the elevated copy of this script do the same work.
+  if ($elevated) {{
+    Write-Log "target still not writable after elevation: $target"
+    Write-Status "failed: this folder cannot be written to, even as administrator"
+    exit 1
+  }}
+  Write-Log "target not writable, asking for elevation: $target"
+  # $PSCommandPath must be quoted: an install under a user name with a space
+  # made the elevated copy fail to start, and the update vanished silently.
   Start-Process -FilePath 'powershell' -Verb RunAs -WindowStyle Hidden -ArgumentList @(
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-    '-File', $PSCommandPath
+    '-File', ('"' + $PSCommandPath + '"'), '-Elevated'
   )
-  exit
+  exit 0
 }}
 
+Write-Log "waiting for pid {pid} to exit"
 $deadline = (Get-Date).AddSeconds({_WAIT_SECONDS})
 while ((Get-Date) -lt $deadline) {{
   if (-not (Get-Process -Id {pid} -ErrorAction SilentlyContinue)) {{ break }}
   Start-Sleep -Milliseconds 400
 }}
 Start-Sleep -Milliseconds 800
+
+# The bundled msedgedriver lives inside this folder, so a driver still running
+# from a just-ended session holds files robocopy has to replace. Only processes
+# whose own path is under this install are stopped: nothing of the person's is
+# touched, and a real Edge window they are using is left alone.
+try {{
+  $mine = Get-Process -ErrorAction SilentlyContinue | Where-Object {{
+    $_.Path -and $_.Path.StartsWith($target, 'OrdinalIgnoreCase')
+  }}
+  foreach ($proc in $mine) {{
+    Write-Log "stopping leftover process $($proc.ProcessName) ($($proc.Id))"
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+  }}
+  if ($mine) {{ Start-Sleep -Milliseconds 1200 }}
+}} catch {{
+  Write-Log "could not check for leftover processes: $($_.Exception.Message)"
+}}
+
+Write-Log "copying $source to $target"
 # Copy over the old files; never mirror. A mirror would delete a portable
 # config folder, and a leftover file from the previous version is harmless.
 $robocopy = Join-Path $env:SystemRoot 'System32\\robocopy.exe'
-& $robocopy $source $target /E /NFL /NDL /NJH /NJS /NP /R:3 /W:1 | Out-Null
+& $robocopy $source $target /E /NFL /NDL /NJH /NJS /NP /R:5 /W:2 | Out-Null
+$copyCode = $LASTEXITCODE
+Write-Log "robocopy exit code $copyCode"
+
+# robocopy: 0-7 are success (8+ is a real failure). Anything else means files
+# were not copied, and starting the app now would reopen the old version.
+if ($copyCode -ge 8) {{
+  Write-Log "copy failed with code $copyCode"
+  Write-Status "failed: Windows would not replace the files (robocopy $copyCode)"
+  exit 1
+}}
+
+$exePath = Join-Path $target $exe
+if (-not (Test-Path -LiteralPath $exePath)) {{
+  Write-Log "the executable is missing after the copy: $exePath"
+  Write-Status "failed: the new version has no $exe in it"
+  exit 1
+}}
+
 # A copied file inherits the download marker, which stops .NET loading the
 # bundled assemblies; clear it before starting.
 Get-ChildItem -LiteralPath $target -Recurse -File -Force -ErrorAction SilentlyContinue |
   Unblock-File -ErrorAction SilentlyContinue
-Start-Process -FilePath (Join-Path $target $exe) -WorkingDirectory $target
+
+Write-Log "starting $exePath"
+try {{
+  Start-Process -FilePath $exePath -WorkingDirectory $target
+  Write-Status "ok"
+}} catch {{
+  Write-Log "could not start the new copy: $($_.Exception.Message)"
+  Write-Status "failed: the new version would not start ($($_.Exception.Message))"
+}}
 """
 
 
-def _swap_script_posix(pid, staged, target, exe):
+def _swap_script_posix(pid, staged, target, exe, log_path=None):
     """
     The shell that finishes an update after this process exits.
 
     Replacing a running binary's file is allowed on Linux, but copying into a
     mounted folder still has to wait for the old process to let go of its
     handles, and starting the new copy has to happen from the new folder.
+
+    Like the Windows helper, it checks that the copy actually happened rather
+    than assuming: a `cp` into a read-only folder fails quietly with stderr
+    discarded, and the app would reopen on the old version.
     """
+    log_path = log_path or os.path.join(
+        os.path.dirname(os.path.abspath(target)), _LOG_NAME
+    )
+    state_path = update_status_path(target)
+    quoted_exe = os.path.join(target, exe)
     return f"""#!/bin/sh
+LOG={json.dumps(log_path)}
+STATE={json.dumps(state_path)}
+log() {{ printf '%s  %s\\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG" 2>/dev/null; }}
+status() {{ printf '%s\\n' "$1" > "$STATE" 2>/dev/null; }}
+
+log "waiting for pid {pid} to exit"
 i=0
 while kill -0 {pid} 2>/dev/null && [ $i -lt {_WAIT_SECONDS * 2} ]; do
   sleep 0.5
   i=$((i+1))
 done
 sleep 1
-cp -a {json.dumps(staged)}/. {json.dumps(target)}/ 2>/dev/null
-chmod +x {json.dumps(os.path.join(target, exe))} 2>/dev/null
+
+log "copying {staged} to {target}"
+if ! cp -a {json.dumps(staged)}/. {json.dumps(target)}/ 2>>"$LOG"; then
+  log "copy failed"
+  status "failed: the files could not be replaced"
+  exit 1
+fi
+chmod +x {json.dumps(quoted_exe)} 2>/dev/null
+if [ ! -f {json.dumps(quoted_exe)} ]; then
+  log "the executable is missing after the copy"
+  status "failed: the new version has no {exe} in it"
+  exit 1
+fi
+
+log "starting {exe}"
 cd {json.dumps(target)} && ./{exe} >/dev/null 2>&1 &
+status "ok"
+exit 0
 """
 
 
@@ -404,11 +572,20 @@ def apply_and_restart(staged, target, pid=None, platform_name=None):
     except OSError as e:
         return False, f"could not make a place for the updater: {e}"
 
+    # The helper's own record of what it did. The window is gone by the time it
+    # runs, so a file is the only way the next start can say whether the update
+    # landed.
+    log_path = os.path.join(os.path.dirname(os.path.abspath(target)), _LOG_NAME)
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    except OSError:
+        log_path = os.path.join(tempfile.gettempdir(), _LOG_NAME)
+
     try:
         if platform_name == "Windows":
             script = os.path.join(script_dir, "apply-update.ps1")
             with open(script, "w", encoding="utf-8") as handle:
-                handle.write(_swap_script_windows(pid, staged, target, exe))
+                handle.write(_swap_script_windows(pid, staged, target, exe, log_path))
             command = [
                 "powershell",
                 "-NoProfile",
@@ -423,7 +600,7 @@ def apply_and_restart(staged, target, pid=None, platform_name=None):
         else:
             script = os.path.join(script_dir, "apply-update.sh")
             with open(script, "w", encoding="utf-8") as handle:
-                handle.write(_swap_script_posix(pid, staged, target, exe))
+                handle.write(_swap_script_posix(pid, staged, target, exe, log_path))
             os.chmod(script, 0o755)
             command = ["/bin/sh", script]
 
@@ -435,7 +612,10 @@ def apply_and_restart(staged, target, pid=None, platform_name=None):
             close_fds=True,
             **hidden_process_kwargs(platform_name),
         )
-    except OSError as e:
+    except (OSError, ValueError) as e:
+        # ValueError: the platform refused a flag (Windows-only creation flags on
+        # a POSIX host, say). A caller must get an error it can show, never a
+        # traceback from the middle of an update.
         return False, f"could not start the updater: {e}"
 
     return True, ""
@@ -493,18 +673,71 @@ def sweep_stale_updates(target):
     return removed
 
 
+def _can_write(directory):
+    """Whether a real file can be created in `directory` right now."""
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError:
+        return False
+    probe = os.path.join(
+        directory, f".write-test-{os.getpid()}-{int(time.time() * 1000)}"
+    )
+    try:
+        with open(probe, "wb") as handle:
+            handle.write(b"x")
+    except OSError:
+        return False
+    finally:
+        try:
+            os.unlink(probe)
+        except OSError:
+            pass
+    return True
+
+
 def staging_dir(target, tag):
     """
-    Where a downloaded build is unpacked: beside the install, not inside it.
+    Where a downloaded build is unpacked.
 
-    Beside, because the install folder is what gets replaced, and a folder
-    inside it would be copied over itself. The tag is reduced to letters, digits
-    and dots, so a tag like `../../etc` cannot walk out of that folder.
+    Normally beside the install, because the install folder is what gets
+    replaced and a folder inside it would be copied over itself. But beside the
+    install is not always writable: an install under Program Files lives in a
+    directory only an administrator may write, and a build extracted anywhere
+    the person cannot write behaves the same way.
+
+    That was a real update failure, and a silent one. Unpacking into a folder it
+    could not create raised PermissionError after a 300 MB download, so the run
+    ended with the download finished and nothing installed. The staging folder
+    is now placed in the first writable of:
+
+      1. beside the install (the normal case, and what the sweep looks for)
+      2. the desktop user's own temporary directory
+
+    The helper is told where it is, so it does not matter that the fallback is
+    elsewhere; and only the elevation step ever needs to write beside the
+    install.
+
+    Args:
+        target (str): the folder the app is installed in.
+        tag (str): the version being installed, for the folder's name.
+
+    Returns:
+        str: an existing, writable folder for the unpacked build.
     """
-    parent = os.path.dirname(os.path.abspath(target))
     safe_tag = re.sub(r"[^A-Za-z0-9._-]", "_", str(tag or "update"))
     safe_tag = safe_tag.replace("..", "_")
-    return os.path.join(parent, f".autorewarder-update-{safe_tag}")
+    name = f".autorewarder-update-{safe_tag}"
+
+    parent = os.path.dirname(os.path.abspath(target))
+    beside = os.path.join(parent, name)
+    if _can_write(beside):
+        return beside
+
+    # Somewhere this account certainly owns. `tempfile` already knows the
+    # platform's own answer (LOCALAPPDATA\Temp on Windows, /tmp elsewhere).
+    fallback = os.path.join(tempfile.gettempdir(), name)
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
 
 
 def describe_plan(release, platform_name=None):
@@ -557,6 +790,7 @@ __all__ = [
     "_version_tuple",
     "apply_and_restart",
     "clean_staging",
+    "clear_update_status",
     "current_platform",
     "describe_plan",
     "download",
@@ -564,9 +798,11 @@ __all__ = [
     "is_frozen",
     "latest_release",
     "pick_asset",
+    "read_update_status",
     "staging_dir",
     "sweep_stale_updates",
     "unpack",
     "unpack_kind",
+    "update_status_path",
     "verify_file",
 ]

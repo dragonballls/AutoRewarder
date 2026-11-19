@@ -842,6 +842,12 @@ class AutoRewarderAPI:
                     f"{'folder' if len(stale) == 1 else 'folders'}."
                 )
 
+            # The swap helper runs after the window is gone, so this is the
+            # first moment anything can report whether the last update landed.
+            # Saying it here turns "it downloaded but nothing changed" into an
+            # answer on the next start.
+            self._report_last_update(target)
+
         if self.account_manager.current_id() is None:
             # Nothing to warm up; empty state.
             if self._webview_window:
@@ -857,6 +863,54 @@ class AutoRewarderAPI:
             self.is_driver_loading = False
             if self._webview_window:
                 self._webview_window.evaluate_js("stop_loader()")
+
+    def _report_last_update(self, target):
+        """
+        Say what the last update attempt did, then forget it.
+
+        The helper that swaps the files runs after this window has closed, so it
+        cannot report anything here. It leaves a one-line status instead, and
+        this is where the new copy — or the same old copy, when the swap
+        failed — reads it.
+
+        Args:
+            target (str): the folder this app is installed in.
+        """
+        try:
+            status = updater.read_update_status(target)
+        except Exception:
+            return
+        if not status:
+            return
+
+        updater.clear_update_status(target)
+        if status.get("ok"):
+            self.log(f"Update installed. Running {CURRENT_VERSION}.")
+            return
+
+        # Not a log line alone: this is the failure the person could not see
+        # before, so it goes in front of them.
+        message = status.get("message") or "the update did not finish"
+        self.log(f"[ERROR] The last update did not install — {message}.")
+        self.log(
+            "The previous version is still working. Try 'Check for updates' "
+            "again; if it keeps failing, install from "
+            f"https://github.com/{REPO}/releases/latest."
+        )
+        if self._webview_window:
+            toast = (
+                "The last update did not install. "
+                f"{message}. Your app still works — try the update again from "
+                "Settings, About."
+            )
+            try:
+                self._webview_window.evaluate_js(
+                    "typeof show_toast === 'function' && "
+                    f"show_toast({json.dumps(toast)}, 'error', "
+                    "{duration: 12000})"
+                )
+            except Exception:
+                pass
 
     def check_driver_status(self):
         """Return True while the driver warmup thread is active."""

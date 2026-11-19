@@ -323,16 +323,63 @@ class StagingTests(unittest.TestCase):
         """
         Inside it, the swap would copy the new build over its own source — and
         the folder it lives in is the one being replaced.
+
+        A real temp install is used rather than "/apps", because staging is
+        allowed to fall back somewhere writable and a literal path would not
+        show that.
         """
-        target = os.path.join("/apps", "AutoRewarder")
+        base = tempfile.mkdtemp()
+        self.addCleanup(updater.clean_staging, base)
+        target = os.path.join(base, "AutoRewarder")
+        os.makedirs(target)
+
         staged = staging_dir(target, "v4.7")
-        self.assertEqual(os.path.dirname(staged), "/apps")
+
+        self.assertEqual(os.path.dirname(staged), base)
         self.assertIn("v4.7", staged)
+        self.assertNotEqual(os.path.dirname(staged), target)
 
     def test_a_tag_cannot_walk_out_of_that_folder(self):
-        staged = staging_dir("/apps/AutoRewarder", "../../etc")
-        self.assertEqual(os.path.dirname(staged), "/apps")
+        base = tempfile.mkdtemp()
+        self.addCleanup(updater.clean_staging, base)
+        target = os.path.join(base, "AutoRewarder")
+        os.makedirs(target)
+
+        staged = staging_dir(target, "../../etc")
+
+        self.assertEqual(os.path.dirname(staged), base)
         self.assertNotIn("..", staged)
+
+    def test_an_unwritable_install_falls_back_to_a_writable_place(self):
+        """
+        An install under Program Files lives where only an administrator may
+        write. Unpacking beside it used to raise PermissionError after a 300 MB
+        download, so the run ended with the download finished and nothing
+        installed — the update that "downloads but does not update".
+        """
+        if os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() == 0:
+            self.skipTest("needs a POSIX filesystem and a non-root user")
+
+        base = tempfile.mkdtemp()
+        self.addCleanup(updater.clean_staging, base)
+        locked = os.path.join(base, "ProgramFiles")
+        target = os.path.join(locked, "AutoRewarder")
+        os.makedirs(target)
+        os.chmod(locked, 0o555)
+        self.addCleanup(os.chmod, locked, 0o755)
+
+        staged = staging_dir(target, "v4.8.2")
+
+        self.assertNotEqual(os.path.dirname(staged), locked)
+        self.assertTrue(
+            os.access(staged, os.W_OK),
+            f"staging was placed somewhere it cannot write: {staged}",
+        )
+        # And unpacking there really works, which is the failure that mattered.
+        archive = os.path.join(base, "w.zip")
+        _windows_zip(archive)
+        folder, error = unpack(archive, staged, "Windows")
+        self.assertTrue(folder, error)
 
     def test_leftover_updates_are_swept_but_only_their_own_folders(self):
         """
@@ -404,6 +451,74 @@ class SwapScriptTests(unittest.TestCase):
         self.assertIn("-Verb RunAs", script)
         self.assertIn("-WindowStyle Hidden", script)
 
+    def test_a_failed_copy_never_starts_the_old_version(self):
+        """
+        `$ErrorActionPreference = 'Stop'` does not act on a native program's
+        exit code. So a robocopy that could not write fell straight through to
+        the restart, and the app reopened on the old version — the update that
+        "downloads but does not update", with no error anywhere.
+        """
+        script = _swap_script_windows(
+            1, "s", r"C:\Program Files\AutoRewarder", "AutoRewarder.exe"
+        )
+        self.assertIn("$LASTEXITCODE", script)
+        self.assertIn("if ($copyCode -ge 8)", script)
+        # The failure path must exit, not continue to Start-Process.
+        guard = script.index("if ($copyCode -ge 8)")
+        failed = script[guard:]
+        self.assertIn("exit 1", failed[:300])
+        self.assertLess(
+            failed.index("exit 1"),
+            script.index("Start-Process -FilePath $exePath"),
+            "a refused copy must not reach the restart",
+        )
+
+    def test_the_new_executable_must_exist_before_it_is_started(self):
+        script = _swap_script_windows(1, "s", "t", "AutoRewarder.exe")
+        self.assertIn("Test-Path -LiteralPath $exePath", script)
+        self.assertLess(
+            script.index("Test-Path -LiteralPath $exePath"),
+            script.index("Start-Process -FilePath $exePath"),
+        )
+
+    def test_the_elevated_relaunch_quotes_the_script_path(self):
+        """
+        An install under a user name with a space in it made the elevated copy
+        fail to start, and the update vanished with no message.
+        """
+        script = _swap_script_windows(
+            1, "s", r"C:\Users\John Smith\AppData\Local\Programs\AutoRewarder", "x.exe"
+        )
+        # The path handed to the elevated process must arrive quoted.
+        self.assertIn(
+            """('"' + $PSCommandPath + '"')""",
+            script,
+            "the elevated copy's script path must be quoted",
+        )
+
+    def test_the_elevated_copy_cannot_ask_for_elevation_forever(self):
+        """Without a marker, the elevated copy would elevate again, and again."""
+        script = _swap_script_windows(1, "s", "t", "AutoRewarder.exe")
+        self.assertIn("-Elevated", script)
+        self.assertIn("$elevated", script)
+        self.assertIn("Write-Status", script)
+
+    def test_the_helper_records_what_it_did(self):
+        """
+        The window is gone by the time the helper runs, so a file is the only
+        way the next start can say whether the update landed.
+        """
+        script = _swap_script_windows(1, "s", "t", "AutoRewarder.exe")
+        self.assertIn("Write-Log", script)
+        self.assertIn("Write-Status", script)
+        self.assertIn('Write-Status "ok"', script)
+
+    def test_the_posix_helper_also_refuses_to_lie(self):
+        script = _swap_script_posix(1, "/tmp/stage", "/apps/AR", "AutoRewarder")
+        self.assertIn("if ! cp -a", script)
+        self.assertIn('status "failed', script)
+        self.assertIn('status "ok"', script)
+
 
 class ApplyTests(unittest.TestCase):
     def _staged(self, exe="AutoRewarder.exe"):
@@ -473,3 +588,50 @@ class ApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApplyNeverRaisesTests(unittest.TestCase):
+    """An update must always come back with an answer, never a traceback."""
+
+    def test_a_refused_flag_is_an_error_not_a_crash(self):
+        base = tempfile.mkdtemp()
+        self.addCleanup(updater.clean_staging, base)
+        folder = os.path.join(base, "stage")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "AutoRewarder.exe"), "wb") as handle:
+            handle.write(b"binary")
+
+        # A Windows-only creation flag on a POSIX host raises ValueError inside
+        # Popen. The caller has to be able to show that, not die on it.
+        with mock.patch.object(
+            updater.subprocess, "Popen", side_effect=ValueError("bad flag")
+        ):
+            ok, error = apply_and_restart(
+                folder,
+                os.path.join(base, "install"),
+                pid=1,
+                platform_name="Windows",
+            )
+
+        self.assertFalse(ok)
+        self.assertIn("could not start the updater", error)
+
+    def test_leftover_bundled_processes_are_stopped_first(self):
+        """
+        msedgedriver.exe ships inside the install folder. A driver still running
+        from a session that just ended holds files the copy must replace, and
+        robocopy then fails on a file in use.
+        """
+        script = _swap_script_windows(
+            1, "s", r"C:\Apps\AutoRewarder", "AutoRewarder.exe"
+        )
+        self.assertIn("Get-Process", script)
+        self.assertIn("StartsWith($target", script)
+        self.assertLess(
+            script.index("StartsWith($target"),
+            script.index("& $robocopy"),
+            "leftovers must be cleared before the copy, not after",
+        )
+        # Only this install's own processes: a browser the person is using for
+        # something else must not be closed.
+        self.assertNotIn("Get-Process -Name msedge", script)

@@ -379,3 +379,70 @@ class LaunchPromptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FailureReportingTests(unittest.TestCase):
+    """
+    The helper runs after the window is gone, so the only way a failed update
+    can be explained is a file the next start reads.
+
+    Without this, a refused copy looked exactly like an update that was never
+    offered: the app reopened on the old version and said nothing.
+    """
+
+    def _api(self, status_line):
+        import tempfile
+
+        api = _api()
+        base = tempfile.mkdtemp()
+        self.addCleanup(api_module.updater.clean_staging, base)
+        target = os.path.join(base, "AutoRewarder")
+        os.makedirs(target)
+        if status_line is not None:
+            with open(api_module.updater.update_status_path(target), "w") as handle:
+                handle.write(status_line)
+        return api, target
+
+    def test_a_failed_update_is_reported_to_the_person(self):
+        api, target = self._api(
+            "failed: Windows would not replace the files (robocopy 8)"
+        )
+        window = mock.Mock()
+        api._webview_window = window
+
+        api._report_last_update(target)
+
+        log = " ".join(api.logs)
+        self.assertIn("did not install", log)
+        self.assertIn("robocopy 8", log)
+        calls = " ".join(str(c) for c in window.evaluate_js.call_args_list)
+        self.assertIn("show_toast", calls)
+
+    def test_an_installed_update_says_so_quietly(self):
+        api, target = self._api("ok")
+        window = mock.Mock()
+        api._webview_window = window
+
+        api._report_last_update(target)
+
+        log = " ".join(api.logs)
+        self.assertIn("Update installed", log)
+        self.assertFalse(
+            window.evaluate_js.called, "a success needs no dialog in front of anyone"
+        )
+
+    def test_the_status_is_read_once(self):
+        api, target = self._api("ok")
+        api._report_last_update(target)
+        api.logs.clear()
+        api._report_last_update(target)
+        self.assertEqual(
+            [line for line in api.logs if "Update installed" in line],
+            [],
+            "the same result must not be announced on every launch",
+        )
+
+    def test_no_status_means_nothing_to_say(self):
+        api, target = self._api(None)
+        api._report_last_update(target)
+        self.assertEqual(api.logs, [])
