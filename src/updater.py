@@ -40,6 +40,17 @@ from .utils import _version_tuple, hidden_process_kwargs, is_newer_version
 
 GITHUB_RELEASE_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 
+# Where the same answer lives without the API. The API is rate-limited to 60
+# anonymous requests an hour *per IP*, so on a shared address (a VPN, an office,
+# carrier NAT) an app can be told "no update" purely because someone else used
+# the quota. This redirect costs nothing to follow and lands on the release's
+# own page, whose address carries the tag.
+GITHUB_LATEST_REDIRECT = f"https://github.com/{REPO}/releases/latest"
+
+# The download that matters here is built by this project, so its asset names
+# are known: `<repo>/releases/download/<tag>/AutoRewarder-<platform>.<ext>`.
+_ASSET_SUFFIX = {"Windows": "windows.zip", "Linux": "linux.tar.gz"}
+
 # How long the swap script waits for this process to exit before copying
 # anyway. A stall here is worse than a slightly early copy: the person is
 # looking at a closed window either way, and a half-written install is not.
@@ -141,8 +152,18 @@ def latest_release(timeout=10):
     """
     The release GitHub reports as latest, as its JSON, or None.
 
+    Two ways of asking, because the first one can refuse for reasons that have
+    nothing to do with this app. GitHub's anonymous API allows 60 requests an
+    hour per IP address, so on a shared address (a VPN, an office, carrier NAT)
+    the check can answer 403 because of traffic the person had nothing to do
+    with — and an update that exists would never be offered.
+
+    The fallback follows `releases/latest`, which redirects to the release's own
+    page and needs no API at all. Its tag comes from the address, and the
+    download URLs are built from the tag, so the answer is the same shape.
+
     Returns:
-        dict | None: the release, with `tag_name`, `assets` and `body`.
+        dict | None: the release, with `tag_name` and `assets`.
     """
     try:
         response = requests.get(
@@ -151,14 +172,60 @@ def latest_release(timeout=10):
             timeout=timeout,
         )
     except requests.exceptions.RequestException:
+        response = None
+
+    if response is not None and response.status_code == 200:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict) and payload.get("tag_name"):
+            return payload
+
+    return _release_from_redirect(timeout=timeout)
+
+
+def _release_from_redirect(timeout=10):
+    """
+    The latest release, read from the redirect rather than the API.
+
+    Returns:
+        dict | None: {tag_name, assets} with assets in the API's shape, or None
+        when GitHub cannot be reached at all.
+    """
+    try:
+        response = requests.get(
+            GITHUB_LATEST_REDIRECT,
+            headers={"User-Agent": "AutoRewarder-App"},
+            timeout=timeout,
+            allow_redirects=True,
+        )
+    except requests.exceptions.RequestException:
         return None
     if response.status_code != 200:
         return None
-    try:
-        payload = response.json()
-    except ValueError:
+
+    # …/releases/tag/v4.8.2 — the tag is the last path segment.
+    url = getattr(response, "url", "") or ""
+    tag = url.rstrip("/").rsplit("/", 1)[-1] if "/tag/" in url else ""
+    if not tag or "/" in tag:
         return None
-    return payload if isinstance(payload, dict) else None
+
+    assets = []
+    for platform_name, suffix in _ASSET_SUFFIX.items():
+        name = f"AutoRewarder-{suffix}"
+        assets.append(
+            {
+                "name": name,
+                "browser_download_url": (
+                    f"https://github.com/{REPO}/releases/download/{tag}/{name}"
+                ),
+                # No size here: the API carries it, the redirect does not. The
+                # download still checks itself against the final byte count.
+                "size": None,
+            }
+        )
+    return {"tag_name": tag, "assets": assets, "source": "redirect"}
 
 
 def pick_asset(assets, platform_name=None):

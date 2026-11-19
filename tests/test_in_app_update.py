@@ -635,3 +635,76 @@ class ApplyNeverRaisesTests(unittest.TestCase):
         # Only this install's own processes: a browser the person is using for
         # something else must not be closed.
         self.assertNotIn("Get-Process -Name msedge", script)
+
+
+class RateLimitedCheckTests(unittest.TestCase):
+    """
+    The update check must survive GitHub's API saying no.
+
+    The anonymous API allows 60 requests an hour per IP, and a shared address
+    (a VPN, an office, carrier NAT) can spend that on traffic the person had
+    nothing to do with. Answering "no update" there would leave a real update
+    permanently unoffered, with no error to explain it.
+    """
+
+    class _Response:
+        def __init__(self, status, payload=None, url=""):
+            self.status_code = status
+            self._payload = payload
+            self.url = url
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("no json")
+            return self._payload
+
+    def test_a_rate_limited_api_falls_back_to_the_redirect(self):
+        api_403 = self._Response(403)
+        redirect = self._Response(200, url="https://github.com/o/r/releases/tag/v9.9")
+        with mock.patch.object(
+            updater.requests, "get", side_effect=[api_403, redirect]
+        ):
+            release = updater.latest_release()
+        self.assertIsNotNone(release, "a rate limit left the update unfindable")
+        self.assertEqual(release["tag_name"], "v9.9")
+
+    def test_the_fallback_builds_the_real_download_urls(self):
+        redirect = self._Response(
+            200, url="https://github.com/dragonballls/AutoRewarder/releases/tag/v9.9"
+        )
+        with mock.patch.object(updater.requests, "get", return_value=redirect):
+            release = updater._release_from_redirect()
+
+        windows = updater.pick_asset(release["assets"], "Windows")
+        linux = updater.pick_asset(release["assets"], "Linux")
+        self.assertTrue(
+            windows["browser_download_url"].endswith(
+                "/releases/download/v9.9/AutoRewarder-windows.zip"
+            )
+        )
+        self.assertTrue(
+            linux["browser_download_url"].endswith(
+                "/releases/download/v9.9/AutoRewarder-linux.tar.gz"
+            )
+        )
+
+    def test_an_api_answer_is_used_when_it_works(self):
+        good = self._Response(
+            200, payload={"tag_name": "v9.9", "assets": [{"name": "a"}]}
+        )
+        with mock.patch.object(updater.requests, "get", return_value=good) as get:
+            release = updater.latest_release()
+        self.assertEqual(release["tag_name"], "v9.9")
+        self.assertEqual(get.call_count, 1, "the fallback must not be asked for")
+
+    def test_no_contact_at_all_is_still_none(self):
+        import requests as real_requests
+
+        failure = real_requests.exceptions.ConnectionError("offline")
+        with mock.patch.object(updater.requests, "get", side_effect=failure):
+            self.assertIsNone(updater.latest_release())
+
+    def test_a_redirect_to_something_unexpected_is_not_guessed_at(self):
+        odd = self._Response(200, url="https://github.com/dragonballls/AutoRewarder")
+        with mock.patch.object(updater.requests, "get", return_value=odd):
+            self.assertIsNone(updater._release_from_redirect())
